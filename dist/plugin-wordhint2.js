@@ -1612,7 +1612,7 @@ bot.on("message.private", async e => {
                 e.quick_action([Structs.text("此文件非txt格式！")]);
                 return;
             }
-            if (Number(msg.message[0].data.file_size) > 30 * 1024 * 1024) {
+            if (Number(msg.message[0].data.file_size) > 100 * 1024 * 1024) {
                 e.quick_action([Structs.text('文件过大')]);
                 return;
             }
