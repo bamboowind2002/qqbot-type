@@ -2,10 +2,10 @@
 
 ## 工作位置、Git 与操作边界
 
-- **本地开发工作树**位于 `/home/bamboowind/qqbot/oicq-template-main/`；其 `origin` 是私有仓库 `git@github.com:bamboowind2002/qqbot-type.git`，以 `main` 为唯一协作分支。所有源码检查、编辑、构建和测试优先在此工作树进行。
+- **本地开发工作树**直接位于 `/home/bamboowind/qqbot/`；其 `origin` 是私有仓库 `git@github.com:bamboowind2002/qqbot-type.git`，以 `main` 为唯一协作分支。所有源码检查、编辑、构建和测试优先在此工作树进行。
 - **远端部署工作树**位于 `ssh lbamboo` 后的 `~/oicq-template-main/`（当前为 `/home/ubuntu/oicq-template-main/`）。远端只用于部署、读取真实外部运行数据和必要的生产验证；不要在远端直接开发。
 - 正常同步流程：本地修改、验证、`git add` / `git commit` / `git push origin main`；随后远端执行 `git pull --ff-only origin main`。远端紧急修复必须立即提交并推送，再在本地 `git pull --ff-only`，避免两个工作树分叉。
-- 本地顶层 `/home/bamboowind/qqbot/.git` 是平台只读占位目录，因此项目 clone 固定放在上述子目录，顶层仅维护本 `AGENTS.md`。
+- 本地顶层就是 Git 工作树，`.git` 与源码均直接位于 `/home/bamboowind/qqbot/`；本 `AGENTS.md` 已受 Git 跟踪，任何流程变更都应随代码提交并推送。
 - `.env` 是生产凭据的唯一项目内来源，受 Git 忽略；绝不提交、复制、打印或在日志/回复中泄露其 MySQL 或 NapCat 值。`dist/bot.js` 必须从 `dist/config.js` 加载这些配置。
 - 词库、Rime 方案、依赖、Librime、构建物和运行数据均不进 Git，且不要为本地开发从远端复制生产数据，除非用户明确要求。
 - 远端使用专用 GitHub SSH 部署密钥；不要输出私钥或修改该密钥。GitHub remote 已配置为 SSH。
