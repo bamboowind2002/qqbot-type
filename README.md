@@ -28,6 +28,29 @@ pm2 save
 
 Do not start the bot for a build-only verification: it connects to the live NapCat instance and MySQL.
 
+### Development and deployment workflow
+
+Develop and test in a local Git checkout. When a change is ready, commit it and push it to `main`:
+
+```sh
+git add <changed-files>
+git commit -m "Describe the change"
+git push origin main
+```
+
+On the production server, update only from that branch, then reload only when deployment is intended:
+
+```sh
+cd ~/oicq-template-main
+git pull --ff-only origin main
+pm2 startOrReload ecosystem.config.cjs --update-env
+pm2 save
+```
+
+If `package-lock.json` changed, run `npm ci --ignore-scripts` before the reload. If the word-hint native sources or `binding.gyp` changed, rebuild `word_hint.node` using the build commands above first.
+
+For host reboots, run `pm2 startup` once, execute the command PM2 prints with `sudo`, then run `pm2 save`. Thereafter PM2 restores the saved process list automatically; use `pm2 resurrect` only if automatic restoration did not occur.
+
 ## Data boundaries
 
 Word tables (`.txt`, `.hint`, `.config`) and Rime schemes are operational data. Back them up and restore them through the server’s operations process; Git does not contain them. The minimal database DDL is in `db/schema.sql`, with no user records or registered scheme data.
