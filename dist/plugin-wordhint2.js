@@ -13,6 +13,8 @@ import { createCipheriv } from 'crypto';
 import { runSyncWithTimeout } from "./syncWithTimeout.js";
 import { Readable } from 'node:stream';
 import { pipeline } from 'stream/promises';
+const require = createRequire(import.meta.url);
+const word_hint = require('../build/Release/word_hint.node');
 
 
 
