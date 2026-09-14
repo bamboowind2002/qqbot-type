@@ -383,7 +383,6 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
         if (!fin) return Napi::Boolean::New(env, false);
         TempFiles temp_files;
         std::vector<Pair> records;
-        size_t records_bytes = 0;
         int tot = 0;
         std::string code, word;
         std::u32string code32;
@@ -392,13 +391,8 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
             if (word.empty()) return;
             if (code32.empty() && !code.empty()) code32 = to_utf32(code);
             Pair pair{code32, ++tot, to_utf32(word)};
-            records_bytes += pair_memory(pair);
             records.push_back(std::move(pair));
             word.clear();
-            if (records_bytes >= kSortRunBudget) {
-                flush_sort_run(records, temp_files, path);
-                records_bytes = 0;
-            }
         };
         auto end_line = [&]() {
             if (in_word) add_word();
@@ -427,26 +421,10 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
         if (ferror(fin)) { fclose(fin); throw std::runtime_error("cannot read table"); }
         fclose(fin);
         if (in_word) add_word();
-        flush_sort_run(records, temp_files, path);
+        std::sort(records.begin(), records.end());
         Data data;
         data.config.set_default(); data.word_trie.init(); data.code_trie.init();
-        std::vector<FILE*> runs;
-        try {
-            std::priority_queue<RunCursor, std::vector<RunCursor>, RunCursorGreater> queue;
-            for (size_t i = 0; i < temp_files.paths.size(); ++i) {
-                FILE* fp = fopen(temp_files.paths[i].c_str(), "rb");
-                if (!fp) throw std::runtime_error("cannot open sort run");
-                runs.push_back(fp);
-                RunCursor cursor; cursor.fp = fp; cursor.run = i;
-                if (read_run_record(fp, cursor.pair)) queue.push(std::move(cursor));
-            }
-            while (!queue.empty()) {
-                RunCursor cursor = queue.top(); queue.pop();
-                data.insert(cursor.pair.code, cursor.pair.word);
-                if (read_run_record(cursor.fp, cursor.pair)) queue.push(std::move(cursor));
-            }
-            close_all_runs(runs); runs.clear();
-        } catch (...) { close_all_runs(runs); throw; }
+        for (const auto& record : records) data.insert(record.code, record.word);
         data.pre_calculate();
         std::string hint_name = path + ".hint", config_name = path + ".config";
         auto [hint_fp, hint_temp] = make_temp_file(hint_name + ".tmp.XXXXXX");
