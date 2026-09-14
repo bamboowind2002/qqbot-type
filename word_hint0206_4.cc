@@ -2,6 +2,12 @@
 
 
 #include <iostream>
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <queue>
+#include <stdexcept>
 
 
 #include "./word_hint0206/solver4.hpp"
@@ -72,6 +78,262 @@ Napi::Object word_hint_solve(const Napi::CallbackInfo& info) {
 // 参数一：方案文件名(不带扩展名)
 char buf[1 << 20];
 
+namespace {
+constexpr size_t kSortRunBudget = 4 * 1024 * 1024;
+
+struct TempFiles {
+    std::vector<std::string> paths;
+    ~TempFiles() {
+        for (const auto& path : paths) unlink(path.c_str());
+    }
+};
+
+std::pair<FILE*, std::string> make_temp_file(const std::string& pattern) {
+    std::string path = pattern;
+    int fd = mkstemp(&path[0]);
+    if (fd == -1) throw std::runtime_error("cannot create temporary file");
+    FILE* fp = fdopen(fd, "w+b");
+    if (!fp) {
+        close(fd);
+        unlink(path.c_str());
+        throw std::runtime_error("cannot open temporary file");
+    }
+    return {fp, path};
+}
+
+void write_run_record(FILE* fp, const Pair& pair) {
+    uint32_t code_size = pair.code.size();
+    uint32_t word_size = pair.word.size();
+    if (fwrite(&code_size, sizeof(code_size), 1, fp) != 1 ||
+        fwrite(pair.code.data(), sizeof(char32_t), code_size, fp) != code_size ||
+        fwrite(&pair.pos, sizeof(pair.pos), 1, fp) != 1 ||
+        fwrite(&word_size, sizeof(word_size), 1, fp) != 1 ||
+        fwrite(pair.word.data(), sizeof(char32_t), word_size, fp) != word_size)
+        throw std::runtime_error("cannot write sort run");
+}
+
+bool read_run_record(FILE* fp, Pair& pair) {
+    uint32_t code_size, word_size;
+    if (fread(&code_size, sizeof(code_size), 1, fp) != 1) {
+        if (feof(fp)) return false;
+        throw std::runtime_error("cannot read sort run");
+    }
+    pair.code.resize(code_size);
+    if (fread(pair.code.data(), sizeof(char32_t), code_size, fp) != code_size ||
+        fread(&pair.pos, sizeof(pair.pos), 1, fp) != 1 ||
+        fread(&word_size, sizeof(word_size), 1, fp) != 1)
+        throw std::runtime_error("corrupt sort run");
+    pair.word.resize(word_size);
+    if (fread(pair.word.data(), sizeof(char32_t), word_size, fp) != word_size)
+        throw std::runtime_error("corrupt sort run");
+    return true;
+}
+
+size_t pair_memory(const Pair& pair) {
+    return sizeof(Pair) + sizeof(char32_t) * (pair.code.size() + pair.word.size());
+}
+
+void flush_sort_run(std::vector<Pair>& records, TempFiles& temp_files,
+                    const std::string& base_path) {
+    if (records.empty()) return;
+    std::sort(records.begin(), records.end());
+    auto [fp, filename] = make_temp_file(base_path + ".sort.XXXXXX");
+    temp_files.paths.push_back(filename);
+    bool open = true;
+    try {
+        for (const auto& pair : records) write_run_record(fp, pair);
+        if (fclose(fp) != 0) {
+            open = false;
+            throw std::runtime_error("cannot close sort run");
+        }
+        open = false;
+    } catch (...) {
+        if (open) fclose(fp);
+        throw;
+    }
+    records.clear();
+}
+
+struct RunCursor {
+    FILE* fp = nullptr;
+    Pair pair;
+    size_t run = 0;
+};
+
+struct RunCursorGreater {
+    bool operator()(const RunCursor& lhs, const RunCursor& rhs) const {
+        return rhs.pair < lhs.pair;
+    }
+};
+
+void close_all_runs(std::vector<FILE*>& runs) {
+    for (FILE* fp : runs) {
+        if (fp) fclose(fp);
+    }
+}
+
+#if 0  // Superseded disk-backed builder; retained temporarily for reference.
+class SqliteDb {
+   public:
+    explicit SqliteDb(const std::string& filename) {
+        if (sqlite3_open_v2(filename.c_str(), &db_, SQLITE_OPEN_READWRITE |
+            SQLITE_OPEN_CREATE, nullptr) != SQLITE_OK)
+            throw std::runtime_error("cannot create trie index");
+        exec("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; "
+             "PRAGMA temp_store=FILE; PRAGMA cache_size=-65536;");
+    }
+    ~SqliteDb() { if (db_) sqlite3_close(db_); }
+    sqlite3* get() const { return db_; }
+    void exec(const char* sql) {
+        char* error = nullptr;
+        if (sqlite3_exec(db_, sql, nullptr, nullptr, &error) != SQLITE_OK) {
+            std::string message = error ? error : "sqlite error";
+            sqlite3_free(error);
+            throw std::runtime_error(message);
+        }
+    }
+    sqlite3_stmt* prepare(const char* sql) {
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            throw std::runtime_error(sqlite3_errmsg(db_));
+        return stmt;
+    }
+    void step_done(sqlite3_stmt* stmt) {
+        if (sqlite3_step(stmt) != SQLITE_DONE)
+            throw std::runtime_error(sqlite3_errmsg(db_));
+        sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+    }
+   private:
+    sqlite3* db_ = nullptr;
+};
+
+struct Statement {
+    sqlite3_stmt* stmt = nullptr;
+    Statement(SqliteDb& db, const char* sql) : stmt(db.prepare(sql)) {}
+    ~Statement() { if (stmt) sqlite3_finalize(stmt); }
+    Statement(const Statement&) = delete;
+};
+
+class DiskNodeInserter {
+   public:
+    DiskNodeInserter(SqliteDb& db, const char* table)
+        : db_(db), insert_(db, (std::string("INSERT OR IGNORE INTO ") + table +
+              "(parent,ch,len) VALUES(?,?,?)").c_str()),
+          select_(db, (std::string("SELECT id FROM ") + table +
+              " WHERE parent=? AND ch=?").c_str()) {}
+    int ensure(int parent, char32_t ch, int len) {
+        sqlite3_bind_int(insert_.stmt, 1, parent);
+        sqlite3_bind_int(insert_.stmt, 2, static_cast<int>(ch));
+        sqlite3_bind_int(insert_.stmt, 3, len);
+        db_.step_done(insert_.stmt);
+        sqlite3_bind_int(select_.stmt, 1, parent);
+        sqlite3_bind_int(select_.stmt, 2, static_cast<int>(ch));
+        if (sqlite3_step(select_.stmt) != SQLITE_ROW)
+            throw std::runtime_error("missing disk trie node");
+        int id = sqlite3_column_int(select_.stmt, 0);
+        sqlite3_reset(select_.stmt); sqlite3_clear_bindings(select_.stmt);
+        return id;
+    }
+   private:
+    SqliteDb& db_;
+    Statement insert_, select_;
+};
+
+int scalar_int(SqliteDb& db, sqlite3_stmt* stmt, int value) {
+    if (sqlite3_bind_parameter_count(stmt)) sqlite3_bind_int(stmt, 1, value);
+    if (sqlite3_step(stmt) != SQLITE_ROW) throw std::runtime_error("sqlite scalar failed");
+    int result = sqlite3_column_int(stmt, 0);
+    sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+    return result;
+}
+
+size_t disk_node_size(SqliteDb& db, sqlite3_stmt* children,
+                      sqlite3_stmt* terms, int id, bool word) {
+    int child_count = scalar_int(db, children, id);
+    int term_count = scalar_int(db, terms, id);
+    return sizeof(int) * ((word ? 7 : 6) + 2 * child_count +
+                          (word ? 2 : 1) * term_count);
+}
+
+void write_disk_hint(SqliteDb& db, const std::string& filename,
+                     const Config& config) {
+    Statement code_count(db, "SELECT count(*) FROM code_nodes WHERE parent=?");
+    Statement word_count(db, "SELECT count(*) FROM word_nodes WHERE parent=?");
+    Statement code_terms(db, "SELECT count(*) FROM code_words WHERE code_id=?");
+    Statement word_terms(db, "SELECT count(*) FROM word_codes WHERE word_id=?");
+    Statement code_max(db, "SELECT COALESCE(max(id),0)+1 FROM code_nodes");
+    Statement word_max(db, "SELECT COALESCE(max(id),0)+1 FROM word_nodes");
+    int code_nodes = scalar_int(db, code_max.stmt, 0);
+    int word_nodes = scalar_int(db, word_max.stmt, 0);
+    size_t code_size = sizeof(long long) * code_nodes;
+    size_t word_size = sizeof(long long) * word_nodes;
+    for (int id = 0; id < code_nodes; ++id)
+        code_size += disk_node_size(db, code_count.stmt, code_terms.stmt, id, false);
+    for (int id = 0; id < word_nodes; ++id)
+        word_size += disk_node_size(db, word_count.stmt, word_terms.stmt, id, true);
+
+    auto [fp, temporary] = make_temp_file(filename + ".tmp.XXXXXX");
+    bool fp_open = true;
+    try {
+        BufferedFileWriter out(fp);
+        long long code_offset = sizeof(long long) * 2;
+        long long word_offset = code_offset + code_size;
+        out.write_pod(code_offset); out.write_pod(word_offset);
+        size_t offset = sizeof(long long) * code_nodes;
+        for (int id = 0; id < code_nodes; ++id) {
+            long long at = offset; out.write_pod(at);
+            offset += disk_node_size(db, code_count.stmt, code_terms.stmt, id, false);
+        }
+
+        Statement code_node(db, "SELECT parent,ch,num,sum FROM code_nodes WHERE id=?");
+        Statement word_node(db, "SELECT parent,ch,fail,last,len FROM word_nodes WHERE id=?");
+        Statement code_children(db, "SELECT ch,id FROM code_nodes WHERE parent=? ORDER BY ch");
+        Statement word_children(db, "SELECT ch,id FROM word_nodes WHERE parent=? ORDER BY ch");
+        Statement code_word_ids(db, "SELECT word_id FROM code_words WHERE code_id=? ORDER BY pos");
+        Statement word_codes(db, "SELECT wc.code_id,wc.idx FROM word_codes wc JOIN codes c ON c.code_id=wc.code_id WHERE wc.word_id=? ORDER BY c.char_len,c.sort_value,wc.pos");
+        auto write_children = [&](sqlite3_stmt* stmt, int id) {
+            int count = 0;
+            sqlite3_bind_int(stmt, 1, id);
+            while (sqlite3_step(stmt) == SQLITE_ROW) ++count;
+            sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+            out.write_pod(count);
+            sqlite3_bind_int(stmt, 1, id);
+            while (sqlite3_step(stmt) == SQLITE_ROW) { char32_t ch=sqlite3_column_int(stmt,0); out.write_pod(ch); }
+            sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+            sqlite3_bind_int(stmt, 1, id);
+            while (sqlite3_step(stmt) == SQLITE_ROW) out.write_pod(sqlite3_column_int(stmt,1));
+            sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+        };
+        for (int id = 0; id < code_nodes; ++id) {
+            sqlite3_bind_int(code_node.stmt, 1, id);
+            if (sqlite3_step(code_node.stmt) != SQLITE_ROW) throw std::runtime_error("missing code node");
+            int parent=sqlite3_column_int(code_node.stmt,0), ch=sqlite3_column_int(code_node.stmt,1), num=sqlite3_column_int(code_node.stmt,2), sum=sqlite3_column_int(code_node.stmt,3); if(id==0) parent=0;
+            sqlite3_reset(code_node.stmt); sqlite3_clear_bindings(code_node.stmt);
+            write_children(code_children.stmt, id); out.write_pod(parent); char32_t c=ch; out.write_pod(c); out.write_pod(num); out.write_pod(sum);
+            int count=scalar_int(db,code_terms.stmt,id); out.write_pod(count); sqlite3_bind_int(code_word_ids.stmt,1,id); while(sqlite3_step(code_word_ids.stmt)==SQLITE_ROW) out.write_pod(sqlite3_column_int(code_word_ids.stmt,0)); sqlite3_reset(code_word_ids.stmt); sqlite3_clear_bindings(code_word_ids.stmt);
+        }
+        offset = sizeof(long long) * word_nodes;
+        for (int id = 0; id < word_nodes; ++id) {
+            long long at = offset; out.write_pod(at);
+            offset += disk_node_size(db, word_count.stmt, word_terms.stmt, id, true);
+        }
+        for (int id = 0; id < word_nodes; ++id) {
+            sqlite3_bind_int(word_node.stmt, 1, id);
+            if (sqlite3_step(word_node.stmt) != SQLITE_ROW) throw std::runtime_error("missing word node");
+            int parent=sqlite3_column_int(word_node.stmt,0), ch=sqlite3_column_int(word_node.stmt,1), fail=sqlite3_column_int(word_node.stmt,2), last=sqlite3_column_int(word_node.stmt,3), len=sqlite3_column_int(word_node.stmt,4); if(id==0) parent=0;
+            sqlite3_reset(word_node.stmt); sqlite3_clear_bindings(word_node.stmt);
+            write_children(word_children.stmt,id); out.write_pod(parent); char32_t c=ch; out.write_pod(c); out.write_pod(fail); out.write_pod(last); out.write_pod(len);
+            int count=scalar_int(db,word_terms.stmt,id); out.write_pod(count); sqlite3_bind_int(word_codes.stmt,1,id); while(sqlite3_step(word_codes.stmt)==SQLITE_ROW){out.write_pod(sqlite3_column_int(word_codes.stmt,0));out.write_pod(sqlite3_column_int(word_codes.stmt,1));} sqlite3_reset(word_codes.stmt); sqlite3_clear_bindings(word_codes.stmt);
+        }
+        if (!out.flush()) throw std::runtime_error("cannot write hint");
+        int close_status = fclose(fp); fp_open = false;
+        if (close_status != 0) throw std::runtime_error("cannot write hint");
+        if (rename(temporary.c_str(), filename.c_str()) != 0) throw std::runtime_error("cannot publish hint");
+    } catch (...) { if (fp_open) fclose(fp); unlink(temporary.c_str()); throw; }
+}
+#endif
+}  // namespace
+
 // Pool management accepts scheme base paths, matching the rest of the JS API.
 // It deliberately only maps .hint; .config remains per-query and immediately
 // reflects configuration commands.
@@ -116,81 +378,95 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     try {
         std::string path = info[0].As<Napi::String>().Utf8Value();
-
         std::string name = path + ".txt";
         FILE* fin = fopen(name.c_str(), "rb");
         if (!fin) return Napi::Boolean::New(env, false);
-        std::string fstr;
-        size_t sz;
-        while (sz = fread(buf, 1, 1 << 20, fin)) {
-            fstr.append(buf, sz);
-        }
-
-        fclose(fin);
+        TempFiles temp_files;
+        std::vector<Pair> records;
+        size_t records_bytes = 0;
         int tot = 0;
-        std::vector<Pair> table;
-        for (int i = 0; i < fstr.size();) {
-            while (i < fstr.size() && (fstr[i] == '\r' || fstr[i] == '\n')) {
-                i++;
+        std::string code, word;
+        std::u32string code32;
+        bool in_word = false;
+        auto add_word = [&]() {
+            if (word.empty()) return;
+            if (code32.empty() && !code.empty()) code32 = to_utf32(code);
+            Pair pair{code32, ++tot, to_utf32(word)};
+            records_bytes += pair_memory(pair);
+            records.push_back(std::move(pair));
+            word.clear();
+            if (records_bytes >= kSortRunBudget) {
+                flush_sort_run(records, temp_files, path);
+                records_bytes = 0;
             }
-            if (i >= fstr.size()) {
-                break;
-            }
-            std::string code;
-            while (i < fstr.size() && fstr[i] != '\t' && fstr[i] != '\n' &&
-                   fstr[i] != '\r') {
-                code += fstr[i];
-                i++;
-            }
-            if (i >= fstr.size()) break;
-            if (fstr[i] == '\r' || fstr[i] == '\n') continue;
-            i++;
-            int j;
-            std::u32string code32 = to_utf32(code);
-            for (j = i; j < fstr.size();) {
-                std::string word;
-                while (j < fstr.size() && fstr[j] != '\t' && fstr[j] != '\n' &&
-                       fstr[j] != '\r') {
-                    word += fstr[j];
-                    j++;
+        };
+        auto end_line = [&]() {
+            if (in_word) add_word();
+            code.clear();
+            word.clear();
+            code32.clear();
+            in_word = false;
+        };
+
+        size_t read_size;
+        while ((read_size = fread(buf, 1, sizeof(buf), fin)) != 0) {
+            for (size_t i = 0; i < read_size; ++i) {
+                char ch = buf[i];
+                if (ch == '\r' || ch == '\n') {
+                    end_line();
+                } else if (ch == '\t') {
+                    if (in_word) add_word();
+                    else in_word = true;
+                } else if (in_word) {
+                    word.push_back(ch);
+                } else {
+                    code.push_back(ch);
                 }
-                if (word != "") {
-                    ++tot;
-                    // table[code32].push_back(to_utf32(word));
-                    table.push_back({code32, tot, to_utf32(word)});
-                }
-                if (j >= fstr.size() || fstr[j] == '\n' || fstr[j] == '\r')
-                    break;
-                j++;
             }
-            i = j;
         }
-        std::sort(table.begin(), table.end());
+        if (ferror(fin)) { fclose(fin); throw std::runtime_error("cannot read table"); }
+        fclose(fin);
+        if (in_word) add_word();
+        flush_sort_run(records, temp_files, path);
         Data data;
-        data.config.set_default();
-        data.word_trie.init();
-        data.code_trie.init();
-        for (auto& it : table) {
-            data.insert(it.code, it.word);
-        }
-
+        data.config.set_default(); data.word_trie.init(); data.code_trie.init();
+        std::vector<FILE*> runs;
+        try {
+            std::priority_queue<RunCursor, std::vector<RunCursor>, RunCursorGreater> queue;
+            for (size_t i = 0; i < temp_files.paths.size(); ++i) {
+                FILE* fp = fopen(temp_files.paths[i].c_str(), "rb");
+                if (!fp) throw std::runtime_error("cannot open sort run");
+                runs.push_back(fp);
+                RunCursor cursor; cursor.fp = fp; cursor.run = i;
+                if (read_run_record(fp, cursor.pair)) queue.push(std::move(cursor));
+            }
+            while (!queue.empty()) {
+                RunCursor cursor = queue.top(); queue.pop();
+                data.insert(cursor.pair.code, cursor.pair.word);
+                if (read_run_record(cursor.fp, cursor.pair)) queue.push(std::move(cursor));
+            }
+            close_all_runs(runs); runs.clear();
+        } catch (...) { close_all_runs(runs); throw; }
         data.pre_calculate();
-
-        std::string hint_byte = data.save();
-        std::string hint_name = path + ".hint";
+        std::string hint_name = path + ".hint", config_name = path + ".config";
+        auto [hint_fp, hint_temp] = make_temp_file(hint_name + ".tmp.XXXXXX");
+        temp_files.paths.push_back(hint_temp);
+        bool hint_open = true;
+        try {
+            BufferedFileWriter out(hint_fp); data.write(out);
+            if (!out.flush()) throw std::runtime_error("cannot write hint");
+            if (fclose(hint_fp) != 0) { hint_open = false; throw std::runtime_error("cannot write hint"); }
+            hint_open = false;
+        } catch (...) { if (hint_open) fclose(hint_fp); throw; }
+        auto [config_fp, config_temp] = make_temp_file(config_name + ".tmp.XXXXXX");
+        temp_files.paths.push_back(config_temp);
         std::string config_byte = data.config.save();
-        std::string config_name = path + ".config";
-
-        FILE* fp;
-        fp = fopen(hint_name.c_str(), "wb");
-        if (!fp) return Napi::Boolean::New(env, false);
-        fwrite(hint_byte.data(), 1, hint_byte.size(), fp);
-        fclose(fp);
-
-        fp = fopen(config_name.c_str(), "wb");
-        if (!fp) return Napi::Boolean::New(env, false);
-        fwrite(config_byte.data(), 1, config_byte.size(), fp);
-        fclose(fp);
+        bool config_ok = fwrite(config_byte.data(), 1, config_byte.size(), config_fp) == config_byte.size();
+        int config_close = fclose(config_fp);
+        if (!config_ok || config_close != 0) throw std::runtime_error("cannot write config");
+        if (rename(config_temp.c_str(), config_name.c_str()) != 0 || rename(hint_temp.c_str(), hint_name.c_str()) != 0)
+            throw std::runtime_error("cannot publish table");
+        unlink(config_temp.c_str()); unlink(hint_temp.c_str());
 
         return Napi::Boolean::New(env, true);
     } catch (std::exception e) {

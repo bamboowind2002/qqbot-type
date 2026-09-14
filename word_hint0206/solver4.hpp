@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <queue>
@@ -17,6 +18,42 @@
 #include <vector>
 
 #include "callback.hpp"
+
+// The on-disk format is deliberately written a field at a time.  Building a
+// complete std::string for each trie used to keep several copies of a large
+// table alive at once while save_table() was running.
+class BufferedFileWriter {
+   public:
+    explicit BufferedFileWriter(FILE* fp) : fp_(fp) { buffer_.reserve(64 * 1024); }
+    ~BufferedFileWriter() { flush(); }
+
+    bool ok() const { return ok_; }
+    bool flush() {
+        if (!buffer_.empty()) {
+            if (fwrite(buffer_.data(), 1, buffer_.size(), fp_) != buffer_.size())
+                ok_ = false;
+            buffer_.clear();
+        }
+        return ok_;
+    }
+    void write(const void* data, size_t size) {
+        if (size >= 64 * 1024) {
+            flush();
+            if (fwrite(data, 1, size, fp_) != size) ok_ = false;
+            return;
+        }
+        if (buffer_.size() + size > 64 * 1024) flush();
+        const char* first = static_cast<const char*>(data);
+        buffer_.insert(buffer_.end(), first, first + size);
+    }
+    template <typename T>
+    void write_pod(const T& value) { write(&value, sizeof(T)); }
+
+   private:
+    FILE* fp_;
+    bool ok_ = true;
+    std::vector<char> buffer_;
+};
 
 struct CodeTrieNode {
     std::map<char32_t, int> ch;
@@ -63,6 +100,24 @@ struct CodeTrieNode {
         }
 
         return res;
+    }
+
+    size_t serialized_size() const {
+        return sizeof(int) * (6 + 2 * ch.size() + word_id.size());
+    }
+
+    void write(BufferedFileWriter& out) const {
+        int ch_num = ch.size();
+        out.write_pod(ch_num);
+        for (const auto& item : ch) out.write_pod(item.first);
+        for (const auto& item : ch) out.write_pod(item.second);
+        out.write_pod(fa);
+        out.write_pod(fa_ch);
+        out.write_pod(num);
+        out.write_pod(sum);
+        int word_id_sz = word_id.size();
+        out.write_pod(word_id_sz);
+        for (int id : word_id) out.write_pod(id);
     }
 };
 
@@ -199,6 +254,22 @@ struct CodeTrie {
         }
         return head + res;
     }
+
+    size_t serialized_size() const {
+        size_t total = sizeof(long long) * nodes.size();
+        for (const auto& node : nodes) total += node.serialized_size();
+        return total;
+    }
+
+    void write(BufferedFileWriter& out) const {
+        size_t offset = sizeof(long long) * nodes.size();
+        for (const auto& node : nodes) {
+            long long disk_offset = offset;
+            out.write_pod(disk_offset);
+            offset += node.serialized_size();
+        }
+        for (const auto& node : nodes) node.write(out);
+    }
 };
 
 /*
@@ -306,6 +377,28 @@ struct WordTrieNode {
         }
 
         return res;
+    }
+
+    size_t serialized_size() const {
+        return sizeof(int) * (7 + 2 * ch.size() + 2 * codes.size());
+    }
+
+    void write(BufferedFileWriter& out) const {
+        int ch_num = ch.size();
+        out.write_pod(ch_num);
+        for (const auto& item : ch) out.write_pod(item.first);
+        for (const auto& item : ch) out.write_pod(item.second);
+        out.write_pod(fa);
+        out.write_pod(fa_ch);
+        out.write_pod(fail);
+        out.write_pod(last);
+        out.write_pod(len);
+        int code_num = codes.size();
+        out.write_pod(code_num);
+        for (const auto& code : codes) {
+            out.write_pod(code.code);
+            out.write_pod(code.index);
+        }
     }
 };
 /*
@@ -479,6 +572,22 @@ struct WordTrie {
         }
         return head + res;
     }
+
+    size_t serialized_size() const {
+        size_t total = sizeof(long long) * nodes.size();
+        for (const auto& node : nodes) total += node.serialized_size();
+        return total;
+    }
+
+    void write(BufferedFileWriter& out) const {
+        size_t offset = sizeof(long long) * nodes.size();
+        for (const auto& node : nodes) {
+            long long disk_offset = offset;
+            out.write_pod(disk_offset);
+            offset += node.serialized_size();
+        }
+        for (const auto& node : nodes) node.write(out);
+    }
 };
 
 struct WordTrieReader {
@@ -633,6 +742,20 @@ struct Data {
         res.append(word_trie.save());
 
         return head + res;
+    }
+
+    size_t serialized_size() const {
+        return sizeof(long long) * 2 + code_trie.serialized_size() +
+               word_trie.serialized_size();
+    }
+
+    void write(BufferedFileWriter& out) const {
+        long long code_offset = sizeof(long long) * 2;
+        long long word_offset = code_offset + code_trie.serialized_size();
+        out.write_pod(code_offset);
+        out.write_pod(word_offset);
+        code_trie.write(out);
+        word_trie.write(out);
     }
 };
 
