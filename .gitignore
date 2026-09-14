@@ -1,0 +1,61 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and native build output
+node_modules/
+build/
+
+# External runtime data
+word_hint_module/word_hint/*.txt
+word_hint_module/word_hint/*.hint
+word_hint_module/word_hint/*.config
+rime_scheme/
+data/
+
+# Third-party source trees and downloaded tools
+librime/
+plum/
+fonts/
+*.deb
+*.tgz
+node-v*-headers.tar.gz
+clash-linux-amd64
+rime_deployer
+
+# Logs and temporary artifacts
+logs/
+*.log
+*.pid
+*.pid.lock
+*.seed
+*.swp
+*.swo
+swapfile
+.cache/
+coverage/
+.nyc_output/
+
+# Historical implementations, test material, and unrelated utilities
+dist/bak/
+word_hint.cc
+word_hint1222.cc
+word_hint0206.cc
+word_hint0206_3.cc
+word_hint_bak.cc
+word_hint0206/solver.hpp
+word_hint0206/solver2.hpp
+word_hint0206/solver3.hpp
+word_hint0206/*.bak-*
+word_hint/
+solver_test.hpp
+test*
+tmp*.txt
+dahao/
+saolei/
+QQBot.sql
+*.otf
+*.ttf
+*.jpg
+*.png

@@ -1,0 +1,89 @@
+.word_code {
+    display: inline-block;
+    margin-top: 0px;
+    margin-bottom: 0px;
+    margin-right: 5px;
+    margin-left: 5px;
+}
+
+.word_0 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+}
+
+.word_1 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: red;
+}
+
+.word_2 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: darkorange;
+}
+
+.word_3 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: cornflowerblue;
+}
+
+.word_4 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: gray;
+}
+
+.word_5 {
+    font-family: TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 18pt;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: darkred;
+}
+
+.code {
+    text-align: center;
+    font-family: Fira Code, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 10pt;
+}
+
+.box_head {
+    font-family: Fira Code, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, emoji;
+    font-size: 12pt;
+}
+
+.box_term {
+    display: inline-block;
+    margin-right: 20px;
+}
+
+.box_term1 {
+    display: block;
+}
+
+.box_term2 {
+    display: inline-block;
+    margin-right: 20px;
+    width: 100px;
+}
+
+.box_type {
+    font-size: 18pt;
+}
+
+body {
+    background: #ffffff;
+    color: black;
+}

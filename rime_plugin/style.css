@@ -1,0 +1,112 @@
+@font-face {
+    font-family: pua;
+    src: local(TH-Sy-P0);
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('986WB');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('092etymon');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+:root {
+    --code_font: pua, Fira Code, LXGW WenKai GB, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, Noto Color Emoji, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+    --word_font: pua, LXGW WenKai GB, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, Noto Color Emoji, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+}
+
+body {
+    font-family: var(--code_font);
+    background: #f5f5f5;
+    padding: 0;
+    margin: 0;
+}
+
+.ime-container {
+    display: inline-block;
+    background: #ffffff;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    padding: 8px 10px;
+    min-width: 200px;
+    margin: 10px;
+}
+
+/* 预编辑区 */
+.preedit {
+    font-size: 20px;
+    margin-bottom: 6px;
+    white-space: nowrap;
+}
+
+.preedit .sel {
+    background: #cce5ff;
+    border-radius: 4px;
+    padding: 0 2px;
+}
+
+.cursor {
+    display: inline-block;
+    width: 1px;
+    height: 1em;
+    background: #000;
+    vertical-align: -2px;
+    margin-left: 1px;
+}
+
+@keyframes blink {
+    50% {
+        opacity: 0;
+    }
+}
+
+/* 候选列表 */
+.candidate-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    padding-top: 5px;
+    border-top: 1px solid #b9b9b9;
+}
+
+.candidate-list li {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 6px;
+    font-size: 20px;
+    cursor: default;
+    border-radius: 4px;
+    white-space: nowrap; 
+}
+
+.candidate-list li.highlighted {
+    background: #cce5ff;
+}
+
+.candidate-index {
+    color: #5f5f5f;
+    margin-right: 6px;
+}
+
+
+.candidate-text {
+    flex: 1;
+}
+
+.candidate-comment {
+    margin-left: 40px;
+}
+
+.page-info {
+    font-size: 12px;
+    color: #666;
+    text-align: right;
+    margin-top: 4px;
+}

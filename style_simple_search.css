@@ -1,0 +1,74 @@
+@font-face {
+    font-family: pua;
+    src: local(TH-Sy-P0);
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('986WB');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('092etymon');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+:root {
+    --code_font: pua, Fira Code, Segoe UI Emoji, LXGW WenKai GB, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+    --word_font: pua, LXGW WenKai GB, Segoe UI Emoji, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+}
+
+.page {
+    font-size: 12pt;
+    font-family: var(--code_font);
+    font-variant-ligatures: none;
+}
+
+.container {
+    display: flex;
+    word-break: break-all;
+}
+
+.left {
+    width: 100%;
+    background: #f2f2f2;
+}
+
+.right {
+    width: 100%;
+    background: #ddd;
+}
+
+.down {
+    width: 100%;
+    background: #f2f2f2;
+}
+
+.head {
+    font-family: var(--word_font);
+    font-size: 24pt;
+}
+
+/* .code {
+    display: block;
+} */
+
+.term {
+    display: inline-block;
+    margin-top: 0px;
+    margin-bottom: 0px;
+    margin-right: 10px;
+    margin-left: 10px;
+}
+
+.bold_font {
+    font-weight: bold;
+}
+
+body {
+    background: #ffffff;
+    color: black;
+}

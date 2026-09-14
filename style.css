@@ -1,0 +1,145 @@
+@font-face {
+    font-family: pua;
+    src: local(TH-Sy-P0);
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('986WB');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+@font-face {
+    font-family: pua;
+    src: local('092etymon');
+    unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
+:root {
+    --code_font: pua, Fira Code, Segoe UI Emoji, LXGW WenKai GB, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+    --word_font: pua, LXGW WenKai GB, Segoe UI Emoji, TH-Khaai-TP0, TH-Khaai-TP2, TH-Khaai-TP16, TH-Tshyn-P0, TH-Tshyn-P1, TH-Tshyn-P2, TH-Tshyn-P16, Plangothic P2;
+}
+
+.word_code {
+    display: inline-block;
+    margin-top: 0px;
+    margin-bottom: 0px;
+    margin-right: 5px;
+    margin-left: 5px;
+}
+
+.word_0 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+}
+
+.word_1 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: limegreen;
+}
+
+.word_2 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: darkorange;
+}
+
+.word_3 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: cornflowerblue;
+}
+
+.word_4 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: gray;
+}
+
+.word_5 {
+    font-family: var(--word_font);
+    font-size: 18pt;
+    font-weight: 300;
+    border-bottom: 1.5px solid;
+    text-align: center;
+    color: red;
+}
+
+.code {
+    text-align: center;
+    font-family: var(--code_font);
+    font-size: 10pt;
+    font-variant-ligatures: none;
+}
+
+.box_head {
+    font-family: var(--code_font);
+    font-size: 12pt;
+    font-variant-ligatures: none;
+}
+
+.box_term {
+    display: inline-block;
+    margin-right: 20px;
+    width: 150px;
+}
+
+.box_term1 {
+    display: block;
+}
+
+.box_term2 {
+    display: inline-block;
+    margin-right: 15px;
+    width: 100px;
+}
+
+.box_term3 {
+    display: inline-block;
+    margin-right: 15px;
+    width: 200px;
+}
+
+.box_type {
+    font-size: 18pt;
+}
+
+.is_chong {
+    font-weight: bold;
+    color: red;
+}
+
+.is_que {
+    font-weight: bold;
+    color: mediumpurple;
+}
+
+.box_all_num {
+    font-family: var(--code_font);
+    font-size: 16pt;
+    font-variant-ligatures: none;
+    display: inline-block;
+    width: 250px;
+}
+
+body {
+    background: #ffffff;
+    color: black;
+}
