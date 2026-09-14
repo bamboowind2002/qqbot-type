@@ -71,6 +71,47 @@ Napi::Object word_hint_solve(const Napi::CallbackInfo& info) {
 
 // 参数一：方案文件名(不带扩展名)
 char buf[1 << 20];
+
+// Pool management accepts scheme base paths, matching the rest of the JS API.
+// It deliberately only maps .hint; .config remains per-query and immediately
+// reflects configuration commands.
+static std::string hint_filename(const std::string& base) { return base + ".hint"; }
+
+Napi::Object word_hint_preload(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    Napi::Object ret = Napi::Object::New(env);
+    Napi::Array ok = Napi::Array::New(env), failed = Napi::Array::New(env);
+    if (info.Length() < 1 || !info[0].IsArray()) {
+        Napi::TypeError::New(env, "preload expects an array of scheme paths").ThrowAsJavaScriptException();
+        return ret;
+    }
+    auto paths = info[0].As<Napi::Array>();
+    uint32_t ok_i = 0, bad_i = 0;
+    for (uint32_t i = 0; i < paths.Length(); ++i) {
+        std::string base = paths.Get(i).As<Napi::String>().Utf8Value();
+        if (hint_mapping_pool().get(hint_filename(base))) ok.Set(ok_i++, base);
+        else {
+            Napi::Object item = Napi::Object::New(env);
+            item.Set("path", base); item.Set("error", "cannot mmap .hint");
+            failed.Set(bad_i++, item);
+        }
+    }
+    ret.Set("ok", ok); ret.Set("failed", failed);
+    return ret;
+}
+
+Napi::Boolean word_hint_replace(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    std::string base = info[0].As<Napi::String>().Utf8Value();
+    return Napi::Boolean::New(env, hint_mapping_pool().replace(hint_filename(base)));
+}
+
+Napi::Boolean word_hint_remove(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    std::string base = info[0].As<Napi::String>().Utf8Value();
+    hint_mapping_pool().remove(hint_filename(base));
+    return Napi::Boolean::New(env, true);
+}
 Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     try {
@@ -724,6 +765,9 @@ Napi::Object word_hint_solve_simple_search_func(const Napi::CallbackInfo& info) 
 Napi::Object init(Napi::Env env, Napi::Object exports) {
     exports.Set("solve", Napi::Function::New(env, word_hint_solve));
     exports.Set("save_table", Napi::Function::New(env, word_hint_save_table));
+    exports.Set("preload", Napi::Function::New(env, word_hint_preload));
+    exports.Set("replace", Napi::Function::New(env, word_hint_replace));
+    exports.Set("remove", Napi::Function::New(env, word_hint_remove));
     exports.Set("get_ext", Napi::Function::New(env, word_hint_get_ext));
     exports.Set("set_ext", Napi::Function::New(env, word_hint_set_ext));
     exports.Set("solve_simple",

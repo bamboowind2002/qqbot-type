@@ -11,6 +11,9 @@
 #include <set>
 #include <stack>
 #include <string>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "callback.hpp"
@@ -644,28 +647,100 @@ unsigned long get_file_size(const char* path) {
     return filesize;
 }
 
+// A mapping stays alive for as long as a query has a shared_ptr to it.  This is
+// important when a scheme is replaced: erasing it from the pool must not
+// invalidate a synchronous query which already started using the old inode.
+struct HintMapping {
+    void* p = nullptr;
+    size_t len = 0;
+    ~HintMapping() {
+        if (p && p != MAP_FAILED) munmap(p, len);
+    }
+};
+
+class HintMappingPool {
+   public:
+    std::shared_ptr<HintMapping> get(const std::string& filename) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = mappings_.find(filename);
+        if (it != mappings_.end()) return it->second;
+        return map_locked(filename);
+    }
+
+    // Map first, then publish. A failed replacement leaves the old mapping
+    // usable, which is the property upload publication relies on.
+    bool replace(const std::string& filename) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto mapping = make_mapping(filename);
+        if (!mapping) return false;
+        mappings_[filename] = mapping;
+        return true;
+    }
+
+    void remove(const std::string& filename) {
+        std::lock_guard<std::mutex> lock(mu_);
+        mappings_.erase(filename);
+    }
+
+   private:
+    std::shared_ptr<HintMapping> map_locked(const std::string& filename) {
+        auto mapping = make_mapping(filename);
+        if (mapping) mappings_[filename] = mapping;
+        return mapping;
+    }
+    static std::shared_ptr<HintMapping> make_mapping(const std::string& filename) {
+        int fd = open(filename.c_str(), O_RDONLY);
+        if (fd == -1) return nullptr;
+        struct stat st {};
+        if (fstat(fd, &st) != 0 || st.st_size <= 0) { close(fd); return nullptr; }
+        void* p = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+        close(fd);
+        if (p == MAP_FAILED) return nullptr;
+        // Reject the common truncated/corrupt cases during preload instead of
+        // letting a later trie read dereference outside the mapping.
+        if (st.st_size < static_cast<off_t>(sizeof(long long) * 2)) {
+            munmap(p, st.st_size); return nullptr;
+        }
+        const long long* offsets = static_cast<const long long*>(p);
+        if (offsets[0] < static_cast<long long>(sizeof(long long) * 2) ||
+            offsets[1] < static_cast<long long>(sizeof(long long) * 2) ||
+            offsets[0] >= st.st_size || offsets[1] >= st.st_size) {
+            munmap(p, st.st_size); return nullptr;
+        }
+        auto result = std::make_shared<HintMapping>();
+        result->p = p;
+        result->len = static_cast<size_t>(st.st_size);
+        return result;
+    }
+    std::mutex mu_;
+    std::unordered_map<std::string, std::shared_ptr<HintMapping>> mappings_;
+};
+
+inline HintMappingPool& hint_mapping_pool() {
+    static HintMappingPool pool;
+    return pool;
+}
+
 struct DataReader {
     // FILE* fp;
     // long long offset;
     Config config;
     void* p = nullptr;
     size_t len = 0;
+    std::shared_ptr<HintMapping> mapping;
 
     bool load_hint(const std::string& filename) {
-        p = nullptr;
-        int fd = open(filename.c_str(), O_RDONLY);
-        if (fd == -1) return false;
-        len = get_file_size(filename.c_str());
-        p = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
-        close(fd);
-        if (p == MAP_FAILED) return false;
+        mapping = hint_mapping_pool().get(filename);
+        if (!mapping) { p = nullptr; len = 0; return false; }
+        p = mapping->p;
+        len = mapping->len;
         return true;
     }
 
     void unload_hint() {
-        if (p != MAP_FAILED && p) {
-            munmap(p, len);
-        }
+        mapping.reset();
+        p = nullptr;
+        len = 0;
     }
 
     bool load_config(const std::string& filename) {

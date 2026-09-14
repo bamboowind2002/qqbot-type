@@ -10,7 +10,7 @@ import mysql from 'mysql'
 import { get_rank } from './rank.js';
 import http from 'http'
 import { createCipheriv } from 'crypto';
-import { runSyncWithTimeout } from "./syncWithTimeout.js";
+import { configureRegularWorkers, removeRegularWorkerScheme, replaceRegularWorkerScheme, runRegularWithTimeout } from "./syncWithTimeout.js";
 import { Readable } from 'node:stream';
 import { pipeline } from 'stream/promises';
 const require = createRequire(import.meta.url);
@@ -36,13 +36,7 @@ const word_hint = require('../build/Release/word_hint.node');
 const PAGE_NUM = 100
 async function word_hint_solve_simple_regular(reg_txt, schema, range = { l: 0, r: 100 }) {
     try {
-        let res = await runSyncWithTimeout((reg_txt, schema, range) => {
-            const word_hint = require('../build/Release/word_hint.node');
-            let now_reg = new RegExp(reg_txt, "u");
-            let res = word_hint.solve_simple_func(s => now_reg.test(s), schema, range)
-            res.word = reg_txt;
-            return res;
-        }, [reg_txt, schema, range], 15000)
+        let res = await runRegularWithTimeout('simple', [reg_txt, schema, range], 15000)
         return res;
 
     } catch (e) {
@@ -64,17 +58,7 @@ async function word_hint_solve_simple_search_regular(reg_txt, schema, range = { 
         let reg_txt_search = reg_txt[1] ?? ""
         let reg_txt_chong = reg_txt[2] ?? ""
 
-        let res = await runSyncWithTimeout((reg_txt_simple, reg_txt_search, reg_txt_chong, schema, range) => {
-            const word_hint = require('../build/Release/word_hint.node');
-            let now_reg_simple = new RegExp(reg_txt_simple, "u");
-            let now_reg_search = new RegExp(reg_txt_search, "u");
-            let now_reg_chong = new RegExp(reg_txt_chong, "u");
-            let res = word_hint.solve_simple_search_func(s => now_reg_simple.test(s), s => now_reg_search.test(s), s => now_reg_chong.test(s), schema, range)
-            res.word = reg_txt_simple;
-            res.code_pattern = reg_txt_search;
-            res.chong_pattern = reg_txt_chong;
-            return res;
-        }, [reg_txt_simple, reg_txt_search, reg_txt_chong, schema, range], 15000)
+        let res = await runRegularWithTimeout('simple_search', [reg_txt_simple, reg_txt_search, reg_txt_chong, schema, range], 15000)
         return res;
 
     } catch (e) {
@@ -93,13 +77,7 @@ async function word_hint_solve_simple_search_regular(reg_txt, schema, range = { 
 
 async function word_hint_solve_search_regular(reg_txt, schema, range = { l: 0, r: 100 }) {
     try {
-        let res = await runSyncWithTimeout((reg_txt, schema, range) => {
-            const word_hint = require('../build/Release/word_hint.node');
-            let now_reg = new RegExp(reg_txt, "u");
-            let res = word_hint.solve_search_func(s => now_reg.test(s), schema, range)
-            res.code = reg_txt;
-            return res;
-        }, [reg_txt, schema, range], 15000)
+        let res = await runRegularWithTimeout('search', [reg_txt, schema, range], 15000)
         return res;
 
     } catch (e) {
@@ -581,6 +559,32 @@ function run_mysql(str) {
             resolve(res);
         });
     });
+}
+
+const WORD_HINT_DIR = './word_hint_module/word_hint';
+const schemePath = name => `${WORD_HINT_DIR}/${name}`;
+
+async function preloadRegisteredSchemes() {
+    try {
+        const [publicRows, privateRows] = await Promise.all([
+            run_mysql('select name from public_word_base'), run_mysql('select name from private_word_base')
+        ]);
+        const paths = [...new Set([...publicRows, ...privateRows].map(row => schemePath(row.name)))];
+        const result = word_hint.preload(paths);
+        for (const failed of result.failed) console.warn(`词提预热失败（将按需重试）: ${failed.path}: ${failed.error}`);
+        await configureRegularWorkers(paths);
+    } catch (err) {
+        // A database outage or one bad .hint must never prevent bot startup.
+        console.warn('词提预热跳过（后续查询将按需加载）:', err.message || err);
+    }
+}
+void preloadRegisteredSchemes();
+
+function removeSchemeFiles(base) {
+    for (const ext of ['.txt', '.hint', '.config']) {
+        const filename = base + ext;
+        if (fs.existsSync(filename)) fs.rmSync(filename);
+    }
 }
 
 async function count_word(word) {
@@ -1493,16 +1497,13 @@ bot.on("message.private", async e => {
         if (strs[0] === '删除词提') {
             let records = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
             if (records.length > 0) {
+                const base = schemePath(records[0]['name']);
+                // Drop process mappings before unlinking. Existing synchronous
+                // callers retain a shared mapping until they return.
+                word_hint.remove(base);
+                await removeRegularWorkerScheme(base);
+                removeSchemeFiles(base);
                 await run_mysql(`delete from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-                if (fs.existsSync(`./word_hint_module/word_hint/${records[0]['name']}.txt`)) {
-                    fs.rmSync(`./word_hint_module/word_hint/${records[0]['name']}.txt`);
-                }
-                if (fs.existsSync(`./word_hint_module/word_hint/${records[0]['name']}.hint`)) {
-                    fs.rmSync(`./word_hint_module/word_hint/${records[0]['name']}.hint`);
-                }
-                if (fs.existsSync(`./word_hint_module/word_hint/${records[0]['name']}.config`)) {
-                    fs.rmSync(`./word_hint_module/word_hint/${records[0]['name']}.config`);
-                }
                 e.quick_action([Structs.text("删除成功")]);
             }
             else {
@@ -1649,12 +1650,17 @@ bot.on("message.private", async e => {
             const url = await bot.get_private_file_url({ file_id: msg.message[0].data.file_id })
             console.log(url)
 
+            const finalBase = schemePath(name);
+            // Never write a mapped production file in place: truncating an
+            // mmap-backed .hint can SIGBUS a concurrent query.
+            const tempBase = `${finalBase}.upload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
             // let file_info = await bot.get_file({ file_id: msg.message[0].data.file_id });
             // console.log(file_info)
             const response = await fetch(url.url)
             await pipeline(
                 Readable.fromWeb(response.body),
-                fs.createWriteStream(`./word_hint_module/word_hint/${name}.txt`)
+                fs.createWriteStream(`${tempBase}.txt`)
             );
             // fs.cpSync(file_info.file, `./word_hint_module/word_hint/${name}.txt`);
             // fs.writeFileSync(`./word_hint_module/word_hint/${name}.txt`, file_info.file, 'base64');
@@ -1676,24 +1682,42 @@ bot.on("message.private", async e => {
             // }
 
             try {
-                if (!word_hint.save_table(`./word_hint_module/word_hint/${name}`)) {
+                if (!word_hint.save_table(tempBase) || !word_hint.replace(tempBase)) {
+                    removeSchemeFiles(tempBase);
                     e.quick_action([Structs.text("上传失败，可能原因：词提格式不正确")]);
                 }
                 else {
                     if (config !== null) {
-                        word_hint.set_ext(`./word_hint_module/word_hint/${name}`, config);
+                        word_hint.set_ext(tempBase, config);
                     }
+                    // Each rename is atomic. The old mapped inode remains
+                    // valid while a query holds it; the pool then publishes
+                    // one newly mapped version for future callers.
+                    for (const ext of ['.txt', '.hint', '.config']) fs.renameSync(`${tempBase}${ext}`, `${finalBase}${ext}`);
+                    if (!word_hint.replace(finalBase)) throw new Error('cannot mmap published hint');
+                    word_hint.remove(tempBase);
+                    await replaceRegularWorkerScheme(finalBase);
                     if (que.length > 0) {
                         await run_mysql(`update private_word_base set name = ${mysql.escape(name)} where qqid = '${mysql.escape(e.sender.user_id)}'`);
                     }
                     else {
                         await run_mysql(`insert into private_word_base values('${mysql.escape(e.sender.user_id)}', ${mysql.escape(name)})`);
                     }
+                    // A renamed private scheme is no longer registered. Its
+                    // mappings can be discarded only after the replacement is
+                    // published and the DB update succeeds.
+                    if (que.length > 0 && que[0].name !== name) {
+                        const oldBase = schemePath(que[0].name);
+                        word_hint.remove(oldBase);
+                        await removeRegularWorkerScheme(oldBase);
+                        removeSchemeFiles(oldBase);
+                    }
                     e.quick_action([Structs.text('上传完毕')]);
                 }
             }
             catch (err) {
                 console.log(err)
+                removeSchemeFiles(tempBase);
                 e.quick_action([Structs.text("上传失败，可能原因：词提格式不正确")]);
             }
 
@@ -1836,4 +1860,3 @@ bot.on('message', async e => {
         console.log(e)
     }
 })
-
