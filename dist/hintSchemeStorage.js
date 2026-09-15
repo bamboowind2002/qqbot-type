@@ -18,6 +18,21 @@ export function createSchemeVersion(name) {
   return { directory, base: path.join(directory, 'table') };
 }
 
+export function createLinkedSchemeVersion(sourceBase, targetName) {
+  const version = createSchemeVersion(targetName);
+  try {
+    for (const ext of ['.txt', '.hint', '.config']) {
+      const source = sourceBase + ext;
+      if (!fs.statSync(source).isFile()) throw new Error(`missing scheme file: ${source}`);
+      linkOrCopy(source, version.base + ext);
+    }
+    return version;
+  } catch (err) {
+    removeDirectory(version.directory);
+    throw err;
+  }
+}
+
 export function removeDirectory(directory) {
   if (directory && fs.existsSync(directory)) fs.rmSync(directory, { recursive: true, force: true });
 }

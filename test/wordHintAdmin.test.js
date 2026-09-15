@@ -5,10 +5,13 @@ import {
     AdminCommandError,
     AdminDeleteConfirmationStore,
     assertAdminUploadTarget,
+    assertOwnershipChange,
+    assertSchemeRename,
     extractDirectAdminCommandText,
     isWordHintAdmin,
     normalizeAdminConfigValue,
-    parseWordHintAdminCommand
+    parseWordHintAdminCommand,
+    validateSchemeName
 } from '../dist/wordHintAdmin.js';
 
 test('only the configured QQ is an administrator', () => {
@@ -73,6 +76,66 @@ test('parses list, inspection, configuration, and deletion commands', () => {
     });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 删除 小鹤'), { action: 'delete', name: '小鹤' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 确认删除 123456'), { action: 'confirm-delete', token: '123456' });
+});
+
+test('parses ownership changes to a QQ or public registration', () => {
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 归属 小鹤 123456789'), {
+        action: 'ownership',
+        name: '小鹤',
+        target: { kind: 'private', qqid: '123456789' }
+    });
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 归属 小鹤 公共'), {
+        action: 'ownership',
+        name: '小鹤',
+        target: { kind: 'public', qqid: null }
+    });
+    assert.throws(() => parseWordHintAdminCommand('码表管理 归属 小鹤'), /正确格式/);
+    assert.throws(() => parseWordHintAdminCommand('码表管理 归属 小鹤 abc'), /完整 QQ 号/);
+});
+
+test('parses administrator scheme rename commands', () => {
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 重命名 旧方案 新方案'), {
+        action: 'rename', oldName: '旧方案', newName: '新方案'
+    });
+    assert.throws(() => parseWordHintAdminCommand('码表管理 重命名 旧方案'), /正确格式/);
+    assert.throws(() => parseWordHintAdminCommand('码表管理 重命名 旧方案 新方案 多余'), /正确格式/);
+});
+
+test('validates scheme names and rename collision rules', () => {
+    const command = { oldName: '旧方案', newName: '新方案' };
+    const current = { name: '旧方案', kind: 'private', qqid: '123456789' };
+    assert.doesNotThrow(() => validateSchemeName('新方案'));
+    assert.throws(() => validateSchemeName('a'), /长度/);
+    assert.throws(() => validateSchemeName('码表管理'), /保留名称/);
+    assert.doesNotThrow(() => assertSchemeRename(command, current, null, []));
+    assert.throws(() => assertSchemeRename(command, null, null, []), /未找到原方案/);
+    assert.throws(() => assertSchemeRename(command, current, { name: '新方案', kind: 'public', qqid: null }, []), /占用/);
+    assert.throws(() => assertSchemeRename(command, current, null, ['旧方案']), /a_list\.txt/);
+    assert.throws(() => assertSchemeRename({ oldName: '旧方案', newName: '旧方案' }, current, current, []), /无需重命名/);
+});
+
+test('ownership changes require an existing scheme and a different target', () => {
+    assert.doesNotThrow(() => assertOwnershipChange(
+        { name: '小鹤', kind: 'private', qqid: '123456789' },
+        { kind: 'private', qqid: '987654321' }
+    ));
+    assert.doesNotThrow(() => assertOwnershipChange(
+        { name: '小鹤', kind: 'private', qqid: '123456789' },
+        { kind: 'public', qqid: null }
+    ));
+    assert.doesNotThrow(() => assertOwnershipChange(
+        { name: '小鹤', kind: 'public', qqid: null },
+        { kind: 'private', qqid: '123456789' }
+    ));
+    assert.throws(() => assertOwnershipChange(null, { kind: 'public', qqid: null }), /未找到/);
+    assert.throws(() => assertOwnershipChange(
+        { name: '小鹤', kind: 'public', qqid: null },
+        { kind: 'public', qqid: null }
+    ), /无需调整/);
+    assert.throws(() => assertOwnershipChange(
+        { name: '小鹤', kind: 'private', qqid: '123456789' },
+        { kind: 'private', qqid: '123456789' }
+    ), /无需调整/);
 });
 
 test('QQ lookup requires one complete numeric QQ identifier', () => {

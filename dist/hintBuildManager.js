@@ -98,8 +98,11 @@ export function buildHintAsync(base, options = {}) {
   return job;
 }
 
+export const withUserMutations = (qqids, operation) =>
+  mutationMutex.withKeys(qqids.map(qqid => `user:${qqid}`), operation);
+
 export const withUserMutation = (qqid, operation) =>
-  mutationMutex.withKeys([`user:${qqid}`], operation);
+  withUserMutations([qqid], operation);
 
 export const withSchemeMutations = (names, operation) =>
   mutationMutex.withKeys(names.map(name => `scheme:${name}`), operation);
@@ -171,6 +174,28 @@ export function cancelLatestUserUpload(qqid, name = null) {
   error.code = 'UPLOAD_CANCELLED';
   task.controller.abort(error);
   return { state: 'cancelled', name: task.name, phase: task.phase };
+}
+
+export function cancelUploadsForSchemes(names, details = {}) {
+  const schemeNames = new Set(names);
+  const matching = [];
+  for (const uploads of latestUserUploads.values()) {
+    for (const task of uploads.values()) {
+      if (!schemeNames.has(task.name) || task.controller.signal.aborted) continue;
+      matching.push(task);
+    }
+  }
+  const committing = matching.filter(task => !task.cancelable).length;
+  if (committing > 0) return { cancelled: 0, committing };
+
+  for (const task of matching) {
+    const error = new Error(`scheme ${task.name} is being renamed`);
+    error.code = 'UPLOAD_SCHEME_RENAMED';
+    error.oldName = details.oldName || null;
+    error.newName = details.newName || null;
+    task.controller.abort(error);
+  }
+  return { cancelled: matching.length, committing: 0 };
 }
 
 export function throwIfUploadSuperseded(task) {

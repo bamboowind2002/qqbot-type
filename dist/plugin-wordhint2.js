@@ -14,10 +14,12 @@ import { configureRegularWorkers, removeRegularWorkerScheme, replaceRegularWorke
 import { Readable } from 'node:stream';
 import { pipeline } from 'stream/promises';
 import path from 'node:path';
-import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
-import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
-import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, extractDirectAdminCommandText, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
+import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, cancelUploadsForSchemes, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation, withUserMutations } from './hintBuildManager.js';
+import { createLinkedSchemeVersion, createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
+import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, assertOwnershipChange, assertSchemeRename, extractDirectAdminCommandText, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, validateSchemeName, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
 import { resolveOwnedScheme, resolveUserConfigSelection } from './wordHintUser.js';
+import { databaseConfig } from './config.js';
+import { runMysqlTransaction } from './mysqlTransaction.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -41,17 +43,6 @@ const word_hint = require('../build/Release/word_hint.node');
 const PAGE_NUM = 100
 const MAX_WORD_HINT_UPLOAD_BYTES = 512 * 1024 * 1024
 const adminDeleteConfirmations = new AdminDeleteConfirmationStore()
-const RESERVED_SCHEME_NAMES = new Set([
-    'a', '上传词提', '取消上传', '删除词提', '设置选重键', '设置最大码长',
-    '设置标点引导键', '码表列表', '查询码表', '查看方案配置', '码表管理', 'c', '查询统计'
-])
-
-function validateSchemeName(name) {
-    if (name.length < 2 || name.length > 10) throw new AdminCommandError('方案名称长度必须为 2 至 10 个字符。');
-    if ((/[\\/:*?"'<>|]/g).test(name) || RESERVED_SCHEME_NAMES.has(name)) {
-        throw new AdminCommandError('该方案名称是保留名称或包含禁用字符，请更换名称。');
-    }
-}
 function formatFileSize(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '未知';
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -1863,6 +1854,146 @@ async function setAdminSchemeConfig(command) {
     else await operation();
 }
 
+function formatSchemeOwner(scheme) {
+    return scheme.kind === 'public' ? '公共' : `私人（QQ ${scheme.qqid}）`;
+}
+
+async function changeAdminSchemeOwnership(command) {
+    const expected = await findRegisteredScheme(command.name);
+    assertOwnershipChange(expected, command.target);
+    const qqids = [expected.qqid, command.target.qqid].filter(qqid => qqid !== null);
+    return withUserMutations(qqids, async () => withSchemeMutations([command.name], async () => {
+        const current = await findRegisteredScheme(command.name);
+        if (!sameRegisteredScheme(expected, current)) {
+            throw new AdminCommandError('方案归属在等待操作期间发生变化，请重试。');
+        }
+        assertOwnershipChange(current, command.target);
+        try {
+            await runMysqlTransaction(
+                () => mysql.createConnection(databaseConfig),
+                async query => {
+                    if (current.kind === 'private' && command.target.kind === 'private') {
+                        const result = await query(
+                            'update private_word_base set qqid = ? where qqid = ? and name = ?',
+                            [command.target.qqid, current.qqid, command.name]
+                        );
+                        if (result.affectedRows !== 1) throw new Error('private owner update affected an unexpected number of rows');
+                        return;
+                    }
+                    if (current.kind === 'private') {
+                        const deleted = await query(
+                            'delete from private_word_base where qqid = ? and name = ?',
+                            [current.qqid, command.name]
+                        );
+                        if (deleted.affectedRows !== 1) throw new Error('private ownership removal affected an unexpected number of rows');
+                        await query('insert into public_word_base (name) values (?)', [command.name]);
+                        return;
+                    }
+                    const deleted = await query('delete from public_word_base where name = ?', [command.name]);
+                    if (deleted.affectedRows !== 1) throw new Error('public ownership removal affected an unexpected number of rows');
+                    await query(
+                        'insert into private_word_base (qqid, name) values (?, ?)',
+                        [command.target.qqid, command.name]
+                    );
+                }
+            );
+        } catch (err) {
+            console.warn('管理员调整方案归属事务失败:', err.message || err);
+            const transactionError = new AdminCommandError('数据库事务失败，方案归属保持不变。');
+            transactionError.cause = err;
+            throw transactionError;
+        }
+        return { before: current, after: { name: command.name, ...command.target } };
+    }));
+}
+
+function getRepresentativeSchemeNames() {
+    return fs.readFileSync('./a_list.txt', 'utf8').split(/\s+/).filter(Boolean);
+}
+
+async function renameAdminScheme(command) {
+    const [expected, initialTarget] = await Promise.all([
+        findRegisteredScheme(command.oldName),
+        findRegisteredScheme(command.newName)
+    ]);
+    assertSchemeRename(command, expected, initialTarget);
+    const qqids = expected.kind === 'private' ? [expected.qqid] : [];
+    return withUserMutations(qqids, async () => withSchemeMutations([command.oldName, command.newName], async () => {
+        const [current, target] = await Promise.all([
+            findRegisteredScheme(command.oldName),
+            findRegisteredScheme(command.newName)
+        ]);
+        if (!sameRegisteredScheme(expected, current)) {
+            throw new AdminCommandError('原方案登记在等待操作期间发生变化，请重试。');
+        }
+        assertSchemeRename(command, current, target, getRepresentativeSchemeNames());
+
+        const cancelledUploads = cancelUploadsForSchemes(
+            [command.oldName, command.newName],
+            { oldName: command.oldName, newName: command.newName }
+        );
+        if (cancelledUploads.committing > 0) {
+            throw new AdminCommandError('相关方案仍有上传正在最终登记，请稍后重试。');
+        }
+
+        const sourceBase = schemePath(command.oldName);
+        let version = null;
+        let publication = null;
+        let committed = false;
+        let rollbackSafe = true;
+        try {
+            version = createLinkedSchemeVersion(sourceBase, command.newName);
+            word_hint.get_ext(version.base);
+            if (!word_hint.replace(version.base)) throw new Error('cannot mmap renamed scheme');
+            word_hint.remove(version.base);
+
+            publication = publishSchemeVersion(command.newName, version.directory);
+            try {
+                await refreshPublishedScheme(command.newName, publication.oldBase);
+                const result = current.kind === 'public'
+                    ? await run_mysql(`update public_word_base set name = ${mysql.escape(command.newName)} where name = ${mysql.escape(command.oldName)}`)
+                    : await run_mysql(`update private_word_base set name = ${mysql.escape(command.newName)} where qqid = ${mysql.escape(current.qqid)} and name = ${mysql.escape(command.oldName)}`);
+                if (result.affectedRows !== 1) throw new Error('scheme rename affected an unexpected number of rows');
+            } catch (err) {
+                try {
+                    await restorePublishedScheme(command.newName, publication);
+                } catch (restoreError) {
+                    rollbackSafe = false;
+                    console.warn('管理员重命名方案回滚新路径失败:', restoreError.message || restoreError);
+                }
+                throw err;
+            }
+
+            committed = true;
+            const cleanupSteps = [
+                async () => publication.cleanupPrevious(),
+                async () => word_hint.remove(sourceBase),
+                async () => removeRegularWorkerScheme(sourceBase),
+                async () => removeSchemeStorage(command.oldName)
+            ];
+            for (const cleanup of cleanupSteps) {
+                try {
+                    await cleanup();
+                } catch (cleanupError) {
+                    console.warn('管理员重命名方案后的旧路径清理失败:', cleanupError.message || cleanupError);
+                }
+            }
+            return { scheme: current, cancelledUploads: cancelledUploads.cancelled };
+        } catch (err) {
+            console.warn('管理员重命名方案失败:', err.message || err);
+            const renameError = new AdminCommandError(
+                rollbackSafe
+                    ? '方案重命名失败，原名称和登记保持不变。'
+                    : '方案重命名失败且新路径回滚异常，请检查日志后再操作。'
+            );
+            renameError.cause = err;
+            throw renameError;
+        } finally {
+            if (!committed && rollbackSafe && version !== null) removeDirectory(version.directory);
+        }
+    }));
+}
+
 async function deleteRegisteredScheme(expected) {
     let cleanupError = null;
     const operation = async () => withSchemeMutations([expected.name], async () => {
@@ -1921,6 +2052,25 @@ bot.on("message.private", async e => {
         else if (command.action === 'list') await listAdminSchemes(e, command);
         else if (command.action === 'show') await showAdminScheme(e, command.name);
         else if (command.action === 'lookup-qq') await lookupAdminPrivateSchemeByQq(e, command.qqid);
+        else if (command.action === 'ownership') {
+            const result = await changeAdminSchemeOwnership(command);
+            await sendQuotedText(
+                e,
+                `方案归属已调整\n方案：${command.name}\n原归属：${formatSchemeOwner(result.before)}\n新归属：${formatSchemeOwner(result.after)}`,
+                '管理员调整方案归属'
+            );
+        }
+        else if (command.action === 'rename') {
+            const result = await renameAdminScheme(command);
+            const cancelledText = result.cancelledUploads > 0
+                ? `\n已取消相关未完成上传：${result.cancelledUploads} 个`
+                : '';
+            await sendQuotedText(
+                e,
+                `方案重命名完成\n归属：${formatSchemeOwner(result.scheme)}\n原名称：${command.oldName}\n新名称：${command.newName}${cancelledText}`,
+                '管理员重命名方案'
+            );
+        }
         else if (command.action === 'upload') await runAdminUpload(e, command);
         else if (command.action === 'cancel-upload') {
             const result = cancelLatestUserUpload(`admin:${e.sender.user_id}`, command.name);
@@ -2257,7 +2407,9 @@ bot.on("message.private", async e => {
                     const abortReason = uploadTask.controller.signal.reason;
                     const reasonText = abortReason?.code === 'UPLOAD_CANCELLED'
                         ? '你发送了“取消上传”命令。'
-                        : `你又提交了新的上传请求“${abortReason?.replacementName || '新的方案'}”。`;
+                        : abortReason?.code === 'UPLOAD_SCHEME_RENAMED'
+                            ? `管理员正在将方案“${abortReason.oldName}”重命名为“${abortReason.newName}”。`
+                            : `你又提交了新的上传请求“${abortReason?.replacementName || '新的方案'}”。`;
                     await replyUpload(
                         `上传已取消\n原任务方案：${name}\n取消时阶段：${uploadTask.phase}\n原因：${reasonText}\n处理结果：本任务的临时文件已清理，尚未覆盖原有方案。`
                     );
