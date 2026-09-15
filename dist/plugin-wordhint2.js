@@ -13,6 +13,9 @@ import { createCipheriv } from 'crypto';
 import { configureRegularWorkers, removeRegularWorkerScheme, replaceRegularWorkerScheme, runRegularWithTimeout } from "./syncWithTimeout.js";
 import { Readable } from 'node:stream';
 import { pipeline } from 'stream/promises';
+import path from 'node:path';
+import { buildHintAsync, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
+import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -561,9 +564,6 @@ function run_mysql(str) {
     });
 }
 
-const WORD_HINT_DIR = './word_hint_module/word_hint';
-const schemePath = name => `${WORD_HINT_DIR}/${name}`;
-
 async function preloadRegisteredSchemes() {
     try {
         const [publicRows, privateRows] = await Promise.all([
@@ -580,10 +580,61 @@ async function preloadRegisteredSchemes() {
 }
 void preloadRegisteredSchemes();
 
-function removeSchemeFiles(base) {
-    for (const ext of ['.txt', '.hint', '.config']) {
-        const filename = base + ext;
-        if (fs.existsSync(filename)) fs.rmSync(filename);
+async function refreshPublishedScheme(name, oldBase) {
+    const base = schemePath(name);
+    if (!word_hint.replace(base)) throw new Error('cannot mmap published hint');
+    await replaceRegularWorkerScheme(base);
+    if (oldBase !== base) {
+        word_hint.remove(oldBase);
+        await removeRegularWorkerScheme(oldBase);
+    }
+    return base;
+}
+
+async function restorePublishedScheme(name, publication) {
+    publication.rollback();
+    const restoredBase = schemePath(name);
+    if (fs.existsSync(`${restoredBase}.hint`)) {
+        word_hint.replace(restoredBase);
+        await replaceRegularWorkerScheme(restoredBase);
+    } else {
+        word_hint.remove(publication.newBase);
+        await removeRegularWorkerScheme(publication.newBase);
+    }
+    if (publication.oldBase !== publication.newBase && fs.existsSync(`${publication.oldBase}.hint`)) {
+        word_hint.replace(publication.oldBase);
+        await replaceRegularWorkerScheme(publication.oldBase);
+    }
+}
+
+async function updateSchemeConfigAtomically(name, mutate) {
+    const sourceBase = schemePath(name);
+    const version = createSchemeVersion(name);
+    let committed = false;
+    try {
+        linkOrCopy(`${sourceBase}.txt`, `${version.base}.txt`);
+        linkOrCopy(`${sourceBase}.hint`, `${version.base}.hint`);
+        fs.copyFileSync(`${sourceBase}.config`, `${version.base}.config`);
+        const config = word_hint.get_ext(version.base);
+        mutate(config);
+        if (!word_hint.set_ext(version.base, config)) throw new Error('cannot write staged config');
+        word_hint.get_ext(version.base);
+
+        const publication = publishSchemeVersion(name, version.directory);
+        try {
+            await refreshPublishedScheme(name, publication.oldBase);
+        } catch (err) {
+            await restorePublishedScheme(name, publication);
+            throw err;
+        }
+        committed = true;
+        try {
+            publication.cleanupPrevious();
+        } catch (cleanupError) {
+            console.warn('旧词提配置版本清理失败:', cleanupError.message || cleanupError);
+        }
+    } finally {
+        if (!committed) removeDirectory(version.directory);
     }
 }
 
@@ -604,7 +655,7 @@ async function count_word(word) {
     let ans_list = []
     for (let e of name_list) {
         try {
-            let res = word_hint.has_word(word, `./word_hint_module/word_hint/${e}`)
+            let res = word_hint.has_word(word, schemePath(e))
             if (res) {
                 ans_list.push(e)
                 has++;
@@ -635,7 +686,7 @@ async function query_cmd_exist(cmd) {
 }
 
 async function query_hint(cmd, from_name, text, solver, displayer, range = { l: 0, r: 100 }) {
-    let res = await solver(text, `./word_hint_module/word_hint/${cmd}`, range)
+    let res = await solver(text, schemePath(cmd), range)
     let ans = await displayer(cmd, from_name, res, { 'difficulty': get_rank(text) })
     return ans
 }
@@ -692,7 +743,7 @@ async function solver_all(text, one_solver, schemas = null, range = { l: 0, r: 1
         if (from_name === null) {
             continue
         }
-        let res = one_solver(text, `./word_hint_module/word_hint/${e}`, range)
+        let res = one_solver(text, schemePath(e), range)
         ans.push({ name: e, from: from_name, content: res })
     }
     ans.sort((a, b) => {
@@ -790,7 +841,7 @@ async function query_ime(e, cmd, txt) {
     for (let i = 0; i < terms.length; i++) {
 
         if (terms[i][0] != "\"") {
-            let res = word_hint.solve_code(terms[i], `./word_hint_module/word_hint/${cmd}`);
+            let res = word_hint.solve_code(terms[i], schemePath(cmd));
             res_txt += res
         } else {
             res_txt += JSON.parse("\"" + terms[i].slice(1, terms[i].length - 1) + "\"")
@@ -1462,7 +1513,7 @@ bot.on("message", async e => {
     cmd = cmd.slice(1);
     let res = await run_mysql(`select * from public_word_base where name = ${mysql.escape(cmd)}`);
     if (res.length > 0) {
-        let ans = word_hint.get_ext(`./word_hint_module/word_hint/${cmd}`);
+        let ans = word_hint.get_ext(schemePath(cmd));
         bot.send_msg({
             message_type: e.message_type,
             user_id: e.user_id,
@@ -1473,7 +1524,7 @@ bot.on("message", async e => {
     }
     res = await run_mysql(`select * from private_word_base where name = ${mysql.escape(cmd)}`);
     if (res.length > 0) {
-        let ans = word_hint.get_ext(`./word_hint_module/word_hint/${cmd}`);
+        let ans = word_hint.get_ext(schemePath(cmd));
         bot.send_msg({
             message_type: e.message_type,
             user_id: e.user_id,
@@ -1495,20 +1546,33 @@ bot.on("message.private", async e => {
         }
         strs = strs.trim().split(/\s+/);
         if (strs[0] === '删除词提') {
-            let records = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-            if (records.length > 0) {
-                const base = schemePath(records[0]['name']);
-                // Drop process mappings before unlinking. Existing synchronous
-                // callers retain a shared mapping until they return.
-                word_hint.remove(base);
-                await removeRegularWorkerScheme(base);
-                removeSchemeFiles(base);
-                await run_mysql(`delete from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-                e.quick_action([Structs.text("删除成功")]);
-            }
-            else {
-                e.quick_action([Structs.text("未找到您上传的词提")]);
-            }
+            const userId = String(e.sender.user_id);
+            const deleted = await withUserMutation(userId, async () => {
+                const records = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                if (records.length <= 0) return false;
+                const name = records[0].name;
+                return withSchemeMutations([name], async () => {
+                    // Re-read after acquiring the scheme lock: an upload that
+                    // was already running may have renamed this user's scheme.
+                    const current = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    if (current.length <= 0) return false;
+                    if (current[0].name !== name) throw new Error('private scheme changed while deleting');
+                    const base = schemePath(name);
+                    await run_mysql(`delete from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    try {
+                        word_hint.remove(base);
+                        await removeRegularWorkerScheme(base);
+                        removeSchemeStorage(name);
+                    } catch (cleanupError) {
+                        // Registration is already gone, so leftovers are
+                        // unreachable and must not turn a successful delete
+                        // into a misleading failure response.
+                        console.warn('已删除词提的文件清理失败:', cleanupError.message || cleanupError);
+                    }
+                    return true;
+                });
+            });
+            e.quick_action([Structs.text(deleted ? "删除成功" : "未找到您上传的词提")]);
             return;
         }
         if (strs[0] === '查看方案配置') {
@@ -1517,60 +1581,70 @@ bot.on("message.private", async e => {
                 e.quick_action([Structs.text("请先上传词提")]);
                 return;
             }
-            let config = word_hint.get_ext(`./word_hint_module/word_hint/${que[0]['name']}`);
+            let config = word_hint.get_ext(schemePath(que[0].name));
             e.quick_action([Structs.text(`选重键：${config.candidate}\n最大码长：${config.maxlen}\n标点引导键：${config.punct}`)]);
         }
         if (strs.length < 1)
             return;
         if (strs[0] === '设置选重键') {
-            let que = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-            if (que.length <= 0) {
+            const userId = String(e.sender.user_id);
+            const changed = await withUserMutation(userId, async () => {
+                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                if (que.length <= 0) return false;
+                return withSchemeMutations([que[0].name], async () => {
+                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    if (que.length <= 0) return false;
+                    await updateSchemeConfigAtomically(que[0].name, config => {
+                        config.candidate = strs.length < 2 ? '_;\'34567890' : strs[1];
+                    });
+                    return true;
+                });
+            });
+            if (!changed) {
                 e.quick_action([Structs.text("请先上传词提")]);
                 return;
             }
-            let config = word_hint.get_ext(`./word_hint_module/word_hint/${que[0]['name']}`);
-            if (strs.length < 2) {
-                config.candidate = '_;\'34567890';
-            }
-            else {
-                config.candidate = strs[1];
-            }
-            word_hint.set_ext(`./word_hint_module/word_hint/${que[0]['name']}`, config);
             e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '设置最大码长') {
-            let que = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-            if (que.length <= 0) {
+            const userId = String(e.sender.user_id);
+            const changed = await withUserMutation(userId, async () => {
+                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                if (que.length <= 0) return false;
+                return withSchemeMutations([que[0].name], async () => {
+                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    if (que.length <= 0) return false;
+                    await updateSchemeConfigAtomically(que[0].name, config => {
+                        config.maxlen = strs.length < 2 ? 4 : Number(strs[1]);
+                        if (isNaN(config.maxlen)) config.maxlen = 4;
+                    });
+                    return true;
+                });
+            });
+            if (!changed) {
                 e.quick_action([Structs.text("请先上传词提")]);
                 return;
             }
-            let config = word_hint.get_ext(`./word_hint_module/word_hint/${que[0]['name']}`);
-            if (strs.length < 2) {
-                config.maxlen = 4;
-            }
-            else {
-                config.maxlen = Number(strs[1]);
-                if (isNaN(config.maxlen)) {
-                    config.maxlen = 4;
-                }
-            }
-            word_hint.set_ext(`./word_hint_module/word_hint/${que[0]['name']}`, config);
             e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '设置标点引导键') {
-            let que = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-            if (que.length <= 0) {
+            const userId = String(e.sender.user_id);
+            const changed = await withUserMutation(userId, async () => {
+                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                if (que.length <= 0) return false;
+                return withSchemeMutations([que[0].name], async () => {
+                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    if (que.length <= 0) return false;
+                    await updateSchemeConfigAtomically(que[0].name, config => {
+                        config.punct = strs.length < 2 ? '' : strs[1];
+                    });
+                    return true;
+                });
+            });
+            if (!changed) {
                 e.quick_action([Structs.text("请先上传词提")]);
                 return;
             }
-            let config = word_hint.get_ext(`./word_hint_module/word_hint/${que[0]['name']}`);
-            if (strs.length < 2) {
-                config.punct = '';
-            }
-            else {
-                config.punct = strs[1];
-            }
-            word_hint.set_ext(`./word_hint_module/word_hint/${que[0]['name']}`, config);
             e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '上传词提') {
@@ -1631,94 +1705,84 @@ bot.on("message.private", async e => {
                 e.quick_action([Structs.text('禁止使用该名字！')]);
                 return;
             }
-            // console.log("2222");
-            let que = await run_mysql(`select * from public_word_base where name = ${mysql.escape(name)}`);
-
-            if (que.length > 0) {
-                e.quick_action([Structs.text('该名字已在公共码表中被使用')]);
-                return;
-            }
-            que = await run_mysql(`select * from private_word_base where name = ${mysql.escape(name)} and qqid != '${mysql.escape(e.sender.user_id)}'`);
-
-            if (que.length > 0) {
-                e.quick_action([Structs.text('该名字已被别人使用')]);
-                return;
-            }
-            // console.log(e);
-            // console.log("--------");
             e.quick_action([Structs.text("上传中...")]);
             const url = await bot.get_private_file_url({ file_id: msg.message[0].data.file_id })
-            console.log(url)
-
-            const finalBase = schemePath(name);
-            // Never write a mapped production file in place: truncating an
-            // mmap-backed .hint can SIGBUS a concurrent query.
-            const tempBase = `${finalBase}.upload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-            // let file_info = await bot.get_file({ file_id: msg.message[0].data.file_id });
-            // console.log(file_info)
-            const response = await fetch(url.url)
-            await pipeline(
-                Readable.fromWeb(response.body),
-                fs.createWriteStream(`${tempBase}.txt`)
-            );
-            // fs.cpSync(file_info.file, `./word_hint_module/word_hint/${name}.txt`);
-            // fs.writeFileSync(`./word_hint_module/word_hint/${name}.txt`, file_info.file, 'base64');
-
-            que = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(msg.sender.user_id)}'`);
-
-            let config = null;
-            // if (que.length > 0) {
-            //     if (fs.existsSync(`./word_hint_module/word_hint/${que[0]['name']}.txt`)) {
-            //         fs.rmSync(`./word_hint_module/word_hint/${que[0]['name']}.txt`);
-            //     }
-            //     if (fs.existsSync(`./word_hint_module/word_hint/${que[0]['name']}.hint`)) {
-            //         config = word_hint.get_ext(`./word_hint_module/word_hint/${que[0]['name']}`);
-            //         fs.rmSync(`./word_hint_module/word_hint/${que[0]['name']}.hint`);
-            //     }
-            //     if (fs.existsSync(`./word_hint_module/word_hint/${que[0]['name']}.config`)) {
-            //         fs.rmSync(`./word_hint_module/word_hint/${que[0]['name']}.config`);
-            //     }
-            // }
-
+            const userId = String(e.sender.user_id);
+            const version = createSchemeVersion(name);
+            let committed = false;
             try {
-                if (!word_hint.save_table(tempBase) || !word_hint.replace(tempBase)) {
-                    removeSchemeFiles(tempBase);
-                    e.quick_action([Structs.text("上传失败，可能原因：词提格式不正确")]);
-                }
-                else {
-                    if (config !== null) {
-                        word_hint.set_ext(tempBase, config);
-                    }
-                    // Each rename is atomic. The old mapped inode remains
-                    // valid while a query holds it; the pool then publishes
-                    // one newly mapped version for future callers.
-                    for (const ext of ['.txt', '.hint', '.config']) fs.renameSync(`${tempBase}${ext}`, `${finalBase}${ext}`);
-                    if (!word_hint.replace(finalBase)) throw new Error('cannot mmap published hint');
-                    word_hint.remove(tempBase);
-                    await replaceRegularWorkerScheme(finalBase);
-                    if (que.length > 0) {
-                        await run_mysql(`update private_word_base set name = ${mysql.escape(name)} where qqid = '${mysql.escape(e.sender.user_id)}'`);
-                    }
-                    else {
-                        await run_mysql(`insert into private_word_base values('${mysql.escape(e.sender.user_id)}', ${mysql.escape(name)})`);
-                    }
-                    // A renamed private scheme is no longer registered. Its
-                    // mappings can be discarded only after the replacement is
-                    // published and the DB update succeeds.
-                    if (que.length > 0 && que[0].name !== name) {
-                        const oldBase = schemePath(que[0].name);
-                        word_hint.remove(oldBase);
-                        await removeRegularWorkerScheme(oldBase);
-                        removeSchemeFiles(oldBase);
-                    }
-                    e.quick_action([Structs.text('上传完毕')]);
-                }
+                const response = await fetch(url.url);
+                if (!response.ok || !response.body) throw new Error(`download failed (${response.status})`);
+                await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(`${version.base}.txt`));
+
+                await withUserMutation(userId, async () => {
+                    const ownedRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
+                    const oldName = ownedRows.length > 0 ? ownedRows[0].name : null;
+
+                    await withSchemeMutations([name, oldName].filter(Boolean), async () => {
+                        // Only checks made while holding both locks authorize
+                        // publication. This closes the old check/use race.
+                        const [publicRows, otherPrivateRows, currentOwnedRows] = await Promise.all([
+                            run_mysql(`select * from public_word_base where name = ${mysql.escape(name)}`),
+                            run_mysql(`select * from private_word_base where name = ${mysql.escape(name)} and qqid != ${mysql.escape(userId)}`),
+                            run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`)
+                        ]);
+                        if (publicRows.length > 0) {
+                            const err = new Error('public scheme name is occupied');
+                            err.userMessage = '该名字已在公共码表中被使用';
+                            throw err;
+                        }
+                        if (otherPrivateRows.length > 0) {
+                            const err = new Error('private scheme name is occupied');
+                            err.userMessage = '该名字已被别人使用';
+                            throw err;
+                        }
+                        const currentOldName = currentOwnedRows.length > 0 ? currentOwnedRows[0].name : null;
+                        if (currentOldName !== oldName) throw new Error('private scheme changed while upload was waiting');
+
+                        const config = oldName === null ? null : word_hint.get_ext(schemePath(oldName));
+                        await buildHintAsync(path.resolve(version.base));
+                        if (config !== null && !word_hint.set_ext(version.base, config)) {
+                            throw new Error('cannot preserve scheme config');
+                        }
+                        word_hint.get_ext(version.base);
+                        if (!word_hint.replace(version.base)) throw new Error('cannot mmap staged hint');
+                        word_hint.remove(version.base);
+
+                        const publication = publishSchemeVersion(name, version.directory);
+                        try {
+                            await refreshPublishedScheme(name, publication.oldBase);
+                            if (oldName !== null) {
+                                await run_mysql(`update private_word_base set name = ${mysql.escape(name)} where qqid = ${mysql.escape(userId)}`);
+                            } else {
+                                await run_mysql(`insert into private_word_base (qqid, name) values (${mysql.escape(userId)}, ${mysql.escape(name)})`);
+                            }
+                        } catch (err) {
+                            await restorePublishedScheme(name, publication);
+                            throw err;
+                        }
+
+                        committed = true;
+                        try {
+                            publication.cleanupPrevious();
+                            if (oldName !== null && oldName !== name) {
+                                const oldBase = schemePath(oldName);
+                                word_hint.remove(oldBase);
+                                await removeRegularWorkerScheme(oldBase);
+                                removeSchemeStorage(oldName);
+                            }
+                        } catch (cleanupError) {
+                            console.warn('旧词提版本清理失败:', cleanupError.message || cleanupError);
+                        }
+                    });
+                });
+                e.quick_action([Structs.text('上传完毕')]);
             }
             catch (err) {
                 console.log(err)
-                removeSchemeFiles(tempBase);
-                e.quick_action([Structs.text("上传失败，可能原因：词提格式不正确")]);
+                e.quick_action([Structs.text(err.userMessage || "上传失败，可能原因：词提格式不正确")]);
+            } finally {
+                if (!committed) removeDirectory(version.directory);
             }
 
         }

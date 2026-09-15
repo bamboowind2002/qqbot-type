@@ -1,26 +1,23 @@
 #include <napi.h>
 
-
-#include <iostream>
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <iostream>
 #include <queue>
 #include <stdexcept>
 
-
-#include "./word_hint0206/solver4.hpp"
 #include "./word_hint0206/helper.hpp"
-
-
+#include "./word_hint0206/solver4.hpp"
+#include "./word_hint0206/sorted_builder.hpp"
 
 // 参数一：文本
 // 参数二：方案文件名(不带扩展名)
 // 返回值：……
 Napi::Object word_hint_solve(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
-    
+
     try {
         Solve solver;
         std::string text = info[0].As<Napi::String>().Utf8Value();
@@ -105,7 +102,8 @@ void write_run_record(FILE* fp, const Pair& pair) {
     uint32_t code_size = pair.code.size();
     uint32_t word_size = pair.word.size();
     if (fwrite(&code_size, sizeof(code_size), 1, fp) != 1 ||
-        fwrite(pair.code.data(), sizeof(char32_t), code_size, fp) != code_size ||
+        fwrite(pair.code.data(), sizeof(char32_t), code_size, fp) !=
+            code_size ||
         fwrite(&pair.pos, sizeof(pair.pos), 1, fp) != 1 ||
         fwrite(&word_size, sizeof(word_size), 1, fp) != 1 ||
         fwrite(pair.word.data(), sizeof(char32_t), word_size, fp) != word_size)
@@ -130,7 +128,8 @@ bool read_run_record(FILE* fp, Pair& pair) {
 }
 
 size_t pair_memory(const Pair& pair) {
-    return sizeof(Pair) + sizeof(char32_t) * (pair.code.size() + pair.word.size());
+    return sizeof(Pair) +
+           sizeof(char32_t) * (pair.code.size() + pair.word.size());
 }
 
 void flush_sort_run(std::vector<Pair>& records, TempFiles& temp_files,
@@ -331,41 +330,49 @@ void write_disk_hint(SqliteDb& db, const std::string& filename,
         if (rename(temporary.c_str(), filename.c_str()) != 0) throw std::runtime_error("cannot publish hint");
     } catch (...) { if (fp_open) fclose(fp); unlink(temporary.c_str()); throw; }
 }
+
 #endif
 }  // namespace
 
 // Pool management accepts scheme base paths, matching the rest of the JS API.
 // It deliberately only maps .hint; .config remains per-query and immediately
 // reflects configuration commands.
-static std::string hint_filename(const std::string& base) { return base + ".hint"; }
+static std::string hint_filename(const std::string& base) {
+    return base + ".hint";
+}
 
 Napi::Object word_hint_preload(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     Napi::Object ret = Napi::Object::New(env);
     Napi::Array ok = Napi::Array::New(env), failed = Napi::Array::New(env);
     if (info.Length() < 1 || !info[0].IsArray()) {
-        Napi::TypeError::New(env, "preload expects an array of scheme paths").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "preload expects an array of scheme paths")
+            .ThrowAsJavaScriptException();
         return ret;
     }
     auto paths = info[0].As<Napi::Array>();
     uint32_t ok_i = 0, bad_i = 0;
     for (uint32_t i = 0; i < paths.Length(); ++i) {
         std::string base = paths.Get(i).As<Napi::String>().Utf8Value();
-        if (hint_mapping_pool().get(hint_filename(base))) ok.Set(ok_i++, base);
+        if (hint_mapping_pool().get(hint_filename(base)))
+            ok.Set(ok_i++, base);
         else {
             Napi::Object item = Napi::Object::New(env);
-            item.Set("path", base); item.Set("error", "cannot mmap .hint");
+            item.Set("path", base);
+            item.Set("error", "cannot mmap .hint");
             failed.Set(bad_i++, item);
         }
     }
-    ret.Set("ok", ok); ret.Set("failed", failed);
+    ret.Set("ok", ok);
+    ret.Set("failed", failed);
     return ret;
 }
 
 Napi::Boolean word_hint_replace(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     std::string base = info[0].As<Napi::String>().Utf8Value();
-    return Napi::Boolean::New(env, hint_mapping_pool().replace(hint_filename(base)));
+    return Napi::Boolean::New(env,
+                              hint_mapping_pool().replace(hint_filename(base)));
 }
 
 Napi::Boolean word_hint_remove(const Napi::CallbackInfo& info) {
@@ -378,6 +385,8 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     try {
         std::string path = info[0].As<Napi::String>().Utf8Value();
+        return Napi::Boolean::New(env, sorted_hint_builder::build(path));
+#if 0  // Legacy in-memory builder retained only as an implementation reference.
         std::string name = path + ".txt";
         FILE* fin = fopen(name.c_str(), "rb");
         if (!fin) return Napi::Boolean::New(env, false);
@@ -447,6 +456,7 @@ Napi::Boolean word_hint_save_table(const Napi::CallbackInfo& info) {
         unlink(config_temp.c_str()); unlink(hint_temp.c_str());
 
         return Napi::Boolean::New(env, true);
+#endif
     } catch (std::exception e) {
         std::cout << e.what() << '\n';
         Napi::Error::New(env, "词提文件转化错误").ThrowAsJavaScriptException();
@@ -535,8 +545,7 @@ Napi::Boolean word_hint_has_word(const Napi::CallbackInfo& info) {
 
         std::string text = info[0].As<Napi::String>().Utf8Value();
         std::string type = info[1].As<Napi::String>().Utf8Value();
-        
-        
+
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
 
@@ -574,7 +583,7 @@ Napi::Object word_hint_solve_simple(const Napi::CallbackInfo& info) {
 
         std::string text = info[0].As<Napi::String>().Utf8Value();
         std::string type = info[1].As<Napi::String>().Utf8Value();
-        
+
         int l = 0, r = 500;
         if (info.Length() > 2 && info[2].IsObject()) {
             Napi::Value tmp;
@@ -590,8 +599,8 @@ Napi::Object word_hint_solve_simple(const Napi::CallbackInfo& info) {
                     r = tmp.As<Napi::Number>().Int32Value();
                 }
             }
-        } 
-        
+        }
+
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
 
@@ -615,14 +624,16 @@ Napi::Object word_hint_solve_simple(const Napi::CallbackInfo& info) {
 
         Napi::Object ret = Napi::Object::New(env);
         ret.Set(Napi::String::New(env, "word"), to_utf8(ans.word));
-        Napi::Object ret_show_list = Napi::Array::New(env, std::max(0, std::min(r, (int)ans.code.size()) - l));
+        Napi::Object ret_show_list = Napi::Array::New(
+            env, std::max(0, std::min(r, (int)ans.code.size()) - l));
 
         for (int i = l; i < std::min(r, (int)ans.code.size()); i++) {
             const auto& it = ans.code[i];
             Napi::Object show = Napi::Object::New(env);
             show.Set(Napi::String::New(env, "code"), to_utf8(it.code));
             show.Set(Napi::String::New(env, "index"), it.index);
-            show.Set(Napi::String::New(env, "display_word"), Napi::String::New(env, to_utf8(it.display_word)));
+            show.Set(Napi::String::New(env, "display_word"),
+                     Napi::String::New(env, to_utf8(it.display_word)));
             ret_show_list.Set(i - l, show);
         }
 
@@ -660,11 +671,10 @@ Napi::Object word_hint_solve_search(const Napi::CallbackInfo& info) {
                     r = tmp.As<Napi::Number>().Int32Value();
                 }
             }
-        } 
+        }
 
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
-        
 
         if (!solver.data.load_hint(type_hint)) {
             Napi::Error::New(env, std::string("方案文件\"") + type +
@@ -686,13 +696,16 @@ Napi::Object word_hint_solve_search(const Napi::CallbackInfo& info) {
 
         Napi::Object ret = Napi::Object::New(env);
         ret.Set(Napi::String::New(env, "code"), to_utf8(ans.code));
-        Napi::Object ret_show_list = Napi::Array::New(env, std::max(0, std::min(r, (int)ans.term.size()) - l));
+        Napi::Object ret_show_list = Napi::Array::New(
+            env, std::max(0, std::min(r, (int)ans.term.size()) - l));
 
         for (int i = l; i < std::min(r, (int)ans.term.size()); i++) {
             const auto& it = ans.term[i];
             Napi::Object term = Napi::Object::New(env);
-            term.Set(Napi::String::New(env, "word"), Napi::String::New(env, to_utf8(it.word)));
-            term.Set(Napi::String::New(env, "display_code"), Napi::String::New(env, to_utf8(it.display_code)));
+            term.Set(Napi::String::New(env, "word"),
+                     Napi::String::New(env, to_utf8(it.word)));
+            term.Set(Napi::String::New(env, "display_code"),
+                     Napi::String::New(env, to_utf8(it.display_code)));
             ret_show_list.Set(i - l, term);
         }
 
@@ -718,7 +731,6 @@ Napi::Object word_hint_solve_one(const Napi::CallbackInfo& info) {
 
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
-        
 
         if (!solver.data.load_hint(type_hint)) {
             Napi::Error::New(env, std::string("方案文件\"") + type +
@@ -776,7 +788,6 @@ Napi::String word_hint_solve_code(const Napi::CallbackInfo& info) {
 
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
-        
 
         if (!solver.data.load_hint(type_hint)) {
             Napi::Error::New(env, std::string("方案文件\"") + type +
@@ -811,7 +822,7 @@ Napi::Object word_hint_solve_simple_func(const Napi::CallbackInfo& info) {
 
         auto func = info[0].As<Napi::Function>();
         std::string type = info[1].As<Napi::String>().Utf8Value();
-        
+
         int l = 0, r = 500;
         if (info.Length() > 2 && info[2].IsObject()) {
             Napi::Value tmp;
@@ -827,8 +838,8 @@ Napi::Object word_hint_solve_simple_func(const Napi::CallbackInfo& info) {
                     r = tmp.As<Napi::Number>().Int32Value();
                 }
             }
-        } 
-        
+        }
+
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
 
@@ -846,20 +857,20 @@ Napi::Object word_hint_solve_simple_func(const Napi::CallbackInfo& info) {
             return env.Null().As<Napi::Object>();
         }
 
-        
-
         auto ans = solver.solve_simple_func(func);
 
         Napi::Object ret = Napi::Object::New(env);
         // ret.Set(Napi::String::New(env, "word"), to_utf8(ans.word));
-        Napi::Object ret_show_list = Napi::Array::New(env, std::max(0, std::min(r, (int)ans.size()) - l));
+        Napi::Object ret_show_list = Napi::Array::New(
+            env, std::max(0, std::min(r, (int)ans.size()) - l));
 
         for (int i = l; i < std::min(r, (int)ans.size()); i++) {
             const auto& it = ans[i];
             Napi::Object show = Napi::Object::New(env);
             show.Set(Napi::String::New(env, "code"), to_utf8(it.code));
             show.Set(Napi::String::New(env, "index"), it.index);
-            show.Set(Napi::String::New(env, "display_word"), Napi::String::New(env, to_utf8(it.display_word)));
+            show.Set(Napi::String::New(env, "display_word"),
+                     Napi::String::New(env, to_utf8(it.display_word)));
             ret_show_list.Set(i - l, show);
         }
 
@@ -897,11 +908,10 @@ Napi::Object word_hint_solve_search_func(const Napi::CallbackInfo& info) {
                     r = tmp.As<Napi::Number>().Int32Value();
                 }
             }
-        } 
+        }
 
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
-        
 
         if (!solver.data.load_hint(type_hint)) {
             Napi::Error::New(env, std::string("方案文件\"") + type +
@@ -917,19 +927,20 @@ Napi::Object word_hint_solve_search_func(const Napi::CallbackInfo& info) {
             return env.Null().As<Napi::Object>();
         }
 
-
-
         auto ans = solver.solve_search_func(func);
 
         Napi::Object ret = Napi::Object::New(env);
 
-        Napi::Object ret_show_list = Napi::Array::New(env, std::max(0, std::min(r, (int)ans.size()) - l));
+        Napi::Object ret_show_list = Napi::Array::New(
+            env, std::max(0, std::min(r, (int)ans.size()) - l));
 
         for (int i = l; i < std::min(r, (int)ans.size()); i++) {
             const auto& it = ans[i];
             Napi::Object term = Napi::Object::New(env);
-            term.Set(Napi::String::New(env, "word"), Napi::String::New(env, to_utf8(it.word)));
-            term.Set(Napi::String::New(env, "display_code"), Napi::String::New(env, to_utf8(it.display_code)));
+            term.Set(Napi::String::New(env, "word"),
+                     Napi::String::New(env, to_utf8(it.word)));
+            term.Set(Napi::String::New(env, "display_code"),
+                     Napi::String::New(env, to_utf8(it.display_code)));
             ret_show_list.Set(i - l, term);
         }
 
@@ -945,7 +956,8 @@ Napi::Object word_hint_solve_search_func(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Object word_hint_solve_simple_search_func(const Napi::CallbackInfo& info) {
+Napi::Object word_hint_solve_simple_search_func(
+    const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     try {
         Solve solver;
@@ -954,7 +966,7 @@ Napi::Object word_hint_solve_simple_search_func(const Napi::CallbackInfo& info) 
         auto func_search = info[1].As<Napi::Function>();
         auto func_chong = info[2].As<Napi::Function>();
         std::string type = info[3].As<Napi::String>().Utf8Value();
-        
+
         int l = 0, r = 500;
         if (info.Length() > 2 && info[4].IsObject()) {
             Napi::Value tmp;
@@ -970,8 +982,8 @@ Napi::Object word_hint_solve_simple_search_func(const Napi::CallbackInfo& info) 
                     r = tmp.As<Napi::Number>().Int32Value();
                 }
             }
-        } 
-        
+        }
+
         std::string type_hint = type + ".hint";
         std::string type_config = type + ".config";
 
@@ -989,18 +1001,21 @@ Napi::Object word_hint_solve_simple_search_func(const Napi::CallbackInfo& info) 
             return env.Null().As<Napi::Object>();
         }
 
-        auto ans = solver.solve_simple_search_func(func_simple, func_search, func_chong);
+        auto ans = solver.solve_simple_search_func(func_simple, func_search,
+                                                   func_chong);
 
         Napi::Object ret = Napi::Object::New(env);
         // ret.Set(Napi::String::New(env, "word"), to_utf8(ans.word));
-        Napi::Object ret_show_list = Napi::Array::New(env, std::max(0, std::min(r, (int)ans.size()) - l));
+        Napi::Object ret_show_list = Napi::Array::New(
+            env, std::max(0, std::min(r, (int)ans.size()) - l));
 
         for (int i = l; i < std::min(r, (int)ans.size()); i++) {
             const auto& it = ans[i];
             Napi::Object show = Napi::Object::New(env);
             show.Set(Napi::String::New(env, "code"), to_utf8(it.code));
             show.Set(Napi::String::New(env, "index"), it.index);
-            show.Set(Napi::String::New(env, "display_word"), Napi::String::New(env, to_utf8(it.display_word)));
+            show.Set(Napi::String::New(env, "display_word"),
+                     Napi::String::New(env, to_utf8(it.display_word)));
             ret_show_list.Set(i - l, show);
         }
 

@@ -54,8 +54,14 @@ class RegularWorkerPool {
     const id = this.nextId++;
     return Promise.all(this.workers.map(worker => new Promise(resolve => { worker.updates.set(id, resolve); worker.child.send({ type, id, ...payload }); })));
   }
-  replace(schema) { return this.broadcast('replace', { schema }); }
-  remove(schema) { return this.broadcast('remove', { schema }); }
+  replace(schema) {
+    if (!this.schemas.includes(schema)) this.schemas.push(schema);
+    return this.broadcast('replace', { schema });
+  }
+  remove(schema) {
+    this.schemas = this.schemas.filter(item => item !== schema);
+    return this.broadcast('remove', { schema });
+  }
 }
 const pool = new RegularWorkerPool();
 export const configureRegularWorkers = schemas => pool.configure(schemas);

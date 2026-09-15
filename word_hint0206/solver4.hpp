@@ -8,12 +8,12 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <queue>
 #include <set>
 #include <stack>
 #include <string>
-#include <memory>
-#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -24,13 +24,16 @@
 // table alive at once while save_table() was running.
 class BufferedFileWriter {
    public:
-    explicit BufferedFileWriter(FILE* fp) : fp_(fp) { buffer_.reserve(64 * 1024); }
+    explicit BufferedFileWriter(FILE* fp) : fp_(fp) {
+        buffer_.reserve(64 * 1024);
+    }
     ~BufferedFileWriter() { flush(); }
 
     bool ok() const { return ok_; }
     bool flush() {
         if (!buffer_.empty()) {
-            if (fwrite(buffer_.data(), 1, buffer_.size(), fp_) != buffer_.size())
+            if (fwrite(buffer_.data(), 1, buffer_.size(), fp_) !=
+                buffer_.size())
                 ok_ = false;
             buffer_.clear();
         }
@@ -47,7 +50,9 @@ class BufferedFileWriter {
         buffer_.insert(buffer_.end(), first, first + size);
     }
     template <typename T>
-    void write_pod(const T& value) { write(&value, sizeof(T)); }
+    void write_pod(const T& value) {
+        write(&value, sizeof(T));
+    }
 
    private:
     FILE* fp_;
@@ -811,24 +816,30 @@ class HintMappingPool {
         if (mapping) mappings_[filename] = mapping;
         return mapping;
     }
-    static std::shared_ptr<HintMapping> make_mapping(const std::string& filename) {
+    static std::shared_ptr<HintMapping> make_mapping(
+        const std::string& filename) {
         int fd = open(filename.c_str(), O_RDONLY);
         if (fd == -1) return nullptr;
-        struct stat st {};
-        if (fstat(fd, &st) != 0 || st.st_size <= 0) { close(fd); return nullptr; }
+        struct stat st{};
+        if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+            close(fd);
+            return nullptr;
+        }
         void* p = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
         close(fd);
         if (p == MAP_FAILED) return nullptr;
         // Reject the common truncated/corrupt cases during preload instead of
         // letting a later trie read dereference outside the mapping.
         if (st.st_size < static_cast<off_t>(sizeof(long long) * 2)) {
-            munmap(p, st.st_size); return nullptr;
+            munmap(p, st.st_size);
+            return nullptr;
         }
         const long long* offsets = static_cast<const long long*>(p);
         if (offsets[0] < static_cast<long long>(sizeof(long long) * 2) ||
             offsets[1] < static_cast<long long>(sizeof(long long) * 2) ||
             offsets[0] >= st.st_size || offsets[1] >= st.st_size) {
-            munmap(p, st.st_size); return nullptr;
+            munmap(p, st.st_size);
+            return nullptr;
         }
         auto result = std::make_shared<HintMapping>();
         result->p = p;
@@ -854,7 +865,11 @@ struct DataReader {
 
     bool load_hint(const std::string& filename) {
         mapping = hint_mapping_pool().get(filename);
-        if (!mapping) { p = nullptr; len = 0; return false; }
+        if (!mapping) {
+            p = nullptr;
+            len = 0;
+            return false;
+        }
         p = mapping->p;
         len = mapping->len;
         return true;

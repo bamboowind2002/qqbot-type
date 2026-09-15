@@ -11,6 +11,7 @@ build/
 word_hint_module/word_hint/*.txt
 word_hint_module/word_hint/*.hint
 word_hint_module/word_hint/*.config
+word_hint_module/word_hint/.versions/
 rime_scheme/
 data/
 
