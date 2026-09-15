@@ -41,6 +41,11 @@ export function parseWordHintAdminCommand(text) {
         if (parts.length !== 3) throw new AdminCommandError(`正确格式：码表管理 ${action} <方案名>`);
         return { action: action === '查看' ? 'show' : 'delete', name: parts[2] };
     }
+    if (action === '查QQ') {
+        if (parts.length !== 3) throw new AdminCommandError('正确格式：码表管理 查QQ <QQ号>');
+        if (!/^\d{5,12}$/.test(parts[2])) throw new AdminCommandError('QQ 号格式不正确。');
+        return { action: 'lookup-qq', qqid: parts[2] };
+    }
     if (action === '确认删除') {
         if (parts.length !== 3) throw new AdminCommandError('正确格式：码表管理 确认删除 <确认码>');
         return { action: 'confirm-delete', token: parts[2] };
@@ -151,6 +156,7 @@ export class AdminDeleteConfirmationStore {
 export const WORD_HINT_ADMIN_HELP = `管理员码表命令
 码表管理 列表 [全部|公共|私人] [关键词]
 码表管理 查看 <方案名>
+码表管理 查QQ <QQ号>
 码表管理 上传 公共 <方案名> [替换]
 码表管理 上传 私人 <QQ号> <方案名> [替换]
 码表管理 取消上传

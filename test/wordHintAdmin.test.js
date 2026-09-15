@@ -46,11 +46,19 @@ test('parses list, inspection, configuration, and deletion commands', () => {
     assert.deepEqual(parseWordHintAdminCommand('码表管理 列表'), { action: 'list', kind: '全部', keyword: '' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 列表 私人 五笔'), { action: 'list', kind: '私人', keyword: '五笔' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 查看 小鹤'), { action: 'show', name: '小鹤' });
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 查QQ 123456789'), { action: 'lookup-qq', qqid: '123456789' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 设置 小鹤 最大码长 -1'), {
         action: 'set', name: '小鹤', field: '最大码长', value: '-1'
     });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 删除 小鹤'), { action: 'delete', name: '小鹤' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 确认删除 123456'), { action: 'confirm-delete', token: '123456' });
+});
+
+test('QQ lookup requires one complete numeric QQ identifier', () => {
+    assert.throws(() => parseWordHintAdminCommand('码表管理 查QQ'), /正确格式/);
+    assert.throws(() => parseWordHintAdminCommand('码表管理 查QQ abcdef'), /格式不正确/);
+    assert.throws(() => parseWordHintAdminCommand('码表管理 查QQ 1234'), /格式不正确/);
+    assert.throws(() => parseWordHintAdminCommand('码表管理 查QQ 123456789 extra'), /正确格式/);
 });
 
 test('normalizes and validates configuration values', () => {

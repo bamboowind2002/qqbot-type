@@ -1787,6 +1787,16 @@ async function showAdminScheme(e, name) {
     );
 }
 
+async function lookupAdminPrivateSchemeByQq(e, qqid) {
+    const rows = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(qqid)}`);
+    if (rows.length === 0) {
+        await sendQuotedText(e, `QQ：${qqid}\n未登记私人方案。`, '管理员按 QQ 查询码表');
+        return;
+    }
+    if (rows.length !== 1) throw new AdminCommandError('该 QQ 存在多条私人方案登记，请先人工检查数据库。');
+    await sendQuotedText(e, `QQ：${qqid}\n私人方案：${rows[0].name}`, '管理员按 QQ 查询码表');
+}
+
 async function setAdminSchemeConfig(command) {
     const expected = await findRegisteredScheme(command.name);
     if (expected === null) throw new AdminCommandError('未找到该方案。');
@@ -1861,6 +1871,7 @@ bot.on("message.private", async e => {
         if (command.action === 'help') await sendQuotedText(e, WORD_HINT_ADMIN_HELP, '管理员码表帮助');
         else if (command.action === 'list') await listAdminSchemes(e, command);
         else if (command.action === 'show') await showAdminScheme(e, command.name);
+        else if (command.action === 'lookup-qq') await lookupAdminPrivateSchemeByQq(e, command.qqid);
         else if (command.action === 'upload') await runAdminUpload(e, command);
         else if (command.action === 'cancel-upload') {
             const result = cancelLatestUserUpload(`admin:${e.sender.user_id}`);
