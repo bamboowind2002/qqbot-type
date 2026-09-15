@@ -22,6 +22,15 @@ export function isWordHintAdmin(userId) {
     return WORD_HINT_ADMIN_QQ_IDS.has(String(userId));
 }
 
+export function extractDirectAdminCommandText(message) {
+    if (!Array.isArray(message)) return '';
+    return message
+        .filter(segment => segment?.type === 'text')
+        .map(segment => String(segment.data?.text || ''))
+        .join('')
+        .trim();
+}
+
 export function parseWordHintAdminCommand(text) {
     const parts = String(text || '').trim().split(/\s+/).filter(Boolean);
     if (parts[0] !== '码表管理') return null;

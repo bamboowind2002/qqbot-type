@@ -5,6 +5,7 @@ import {
     AdminCommandError,
     AdminDeleteConfirmationStore,
     assertAdminUploadTarget,
+    extractDirectAdminCommandText,
     isWordHintAdmin,
     normalizeAdminConfigValue,
     parseWordHintAdminCommand
@@ -14,6 +15,16 @@ test('only the configured QQ is an administrator', () => {
     assert.equal(isWordHintAdmin(1144107042), true);
     assert.equal(isWordHintAdmin('1144107042'), true);
     assert.equal(isWordHintAdmin(123456789), false);
+});
+
+test('extracts only direct command text and ignores replied file content', () => {
+    const message = [
+        { type: 'reply', data: { id: '123' } },
+        { type: 'file', data: { file: 'table.txt' } },
+        { type: 'text', data: { text: '码表管理 上传 公共 测试' } }
+    ];
+    assert.equal(extractDirectAdminCommandText(message), '码表管理 上传 公共 测试');
+    assert.equal(extractDirectAdminCommandText(null), '');
 });
 
 test('parses public and private create uploads', () => {

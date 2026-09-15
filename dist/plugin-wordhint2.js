@@ -16,7 +16,7 @@ import { pipeline } from 'stream/promises';
 import path from 'node:path';
 import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
 import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
-import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
+import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, extractDirectAdminCommandText, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -1864,7 +1864,7 @@ async function handleAdminDeleteConfirmation(e, token) {
 
 bot.on("message.private", async e => {
     if (!isWordHintAdmin(e.sender.user_id)) return;
-    const text = (await get_text_content_from_msg(e.message, false)).join('').trim();
+    const text = extractDirectAdminCommandText(e.message);
     if (text !== '码表管理' && !text.startsWith('码表管理 ')) return;
     try {
         const command = parseWordHintAdminCommand(text);
