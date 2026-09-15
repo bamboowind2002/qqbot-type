@@ -37,6 +37,7 @@ const word_hint = require('../build/Release/word_hint.node');
 
 // const page = await browser.newPage()
 const PAGE_NUM = 100
+const MAX_WORD_HINT_UPLOAD_BYTES = 512 * 1024 * 1024
 async function word_hint_solve_simple_regular(reg_txt, schema, range = { l: 0, r: 100 }) {
     try {
         let res = await runRegularWithTimeout('simple', [reg_txt, schema, range], 15000)
@@ -1686,8 +1687,8 @@ bot.on("message.private", async e => {
                 e.quick_action([Structs.text("此文件非txt格式！")]);
                 return;
             }
-            if (Number(msg.message[0].data.file_size) > 30 * 1024 * 1024) {
-                e.quick_action([Structs.text('文件过大')]);
+            if (Number(msg.message[0].data.file_size) > MAX_WORD_HINT_UPLOAD_BYTES) {
+                e.quick_action([Structs.text('文件过大，最大支持512 MiB')]);
                 return;
             }
 
