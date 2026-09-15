@@ -1,5 +1,17 @@
 import { AdminCommandError } from './wordHintAdmin.js';
 
+export const MAX_USER_PRIVATE_SCHEMES = 10;
+
+export function assertUserUploadCapacity(rows, requestedName) {
+    if (rows.some(row => row.name === requestedName)) return;
+    if (rows.length >= MAX_USER_PRIVATE_SCHEMES) {
+        const message = `你当前已有${rows.length}个私人方案，普通用户最多拥有${MAX_USER_PRIVATE_SCHEMES}个；请先删除不需要的方案后再上传新方案。`;
+        const error = new AdminCommandError(message);
+        error.userMessage = message;
+        throw error;
+    }
+}
+
 export function resolveOwnedScheme(rows, requestedName, usage) {
     if (rows.length === 0) throw new AdminCommandError('请先上传词提。');
     if (requestedName === null) {

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, cancelUploadsForSchemes, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation, withUserMutations } from './hintBuildManager.js';
 import { createLinkedSchemeVersion, createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
 import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, assertOwnershipChange, assertSchemeRename, extractDirectAdminCommandText, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, validateSchemeName, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
-import { resolveOwnedScheme, resolveUserConfigSelection } from './wordHintUser.js';
+import { assertUserUploadCapacity, resolveOwnedScheme, resolveUserConfigSelection } from './wordHintUser.js';
 import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 const require = createRequire(import.meta.url);
@@ -2276,6 +2276,12 @@ bot.on("message.private", async e => {
             const sourceFileSize = uploadFile.size;
             const uploadStartedAt = Date.now();
             const userId = String(e.sender.user_id);
+            try {
+                assertUserUploadCapacity(await getOwnedPrivateSchemes(userId), name);
+            } catch (capacityError) {
+                await replyUpload(`上传请求未受理：${capacityError.message}`);
+                return;
+            }
             const uploadTask = beginLatestUserUpload(userId, name);
             const previousTaskText = uploadTask.previousState === 'cancelled'
                 ? `\n已取消你此前尚未完成的上传“${uploadTask.previousName}”。`
@@ -2324,9 +2330,10 @@ bot.on("message.private", async e => {
                         uploadTask.phase = '检查方案名称和归属';
                         // Only checks made while holding both locks authorize
                         // publication. This closes the old check/use race.
-                        const [publicRows, privateRows] = await Promise.all([
+                        const [publicRows, privateRows, ownedRows] = await Promise.all([
                             run_mysql(`select * from public_word_base where name = ${mysql.escape(name)}`),
-                            run_mysql(`select * from private_word_base where name = ${mysql.escape(name)}`)
+                            run_mysql(`select * from private_word_base where name = ${mysql.escape(name)}`),
+                            getOwnedPrivateSchemes(userId)
                         ]);
                         throwIfUploadSuperseded(uploadTask);
                         if (publicRows.length > 0) {
@@ -2339,6 +2346,7 @@ bot.on("message.private", async e => {
                             err.userMessage = '该名字已被别人使用';
                             throw err;
                         }
+                        assertUserUploadCapacity(ownedRows, name);
                         const updating = privateRows.length === 1;
                         const config = updating ? word_hint.get_ext(schemePath(name)) : null;
                         uploadTask.phase = '等待构建队列';

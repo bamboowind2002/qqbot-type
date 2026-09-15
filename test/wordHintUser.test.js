@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveOwnedScheme, resolveUserConfigSelection } from '../dist/wordHintUser.js';
+import { assertUserUploadCapacity, MAX_USER_PRIVATE_SCHEMES, resolveOwnedScheme, resolveUserConfigSelection } from '../dist/wordHintUser.js';
 
 const one = [{ name: '方案甲' }];
 const many = [{ name: '方案甲' }, { name: '方案乙' }];
@@ -35,4 +35,19 @@ test('owned-scheme resolution reports no registration and malformed configuratio
         () => resolveUserConfigSelection(one, ['方案甲', '默认', '多余'], '设置选重键 <方案名> <值|默认>'),
         /正确格式/
     );
+});
+
+test('ordinary users may create at most ten private schemes while retaining same-name updates', () => {
+    const nine = Array.from({ length: MAX_USER_PRIVATE_SCHEMES - 1 }, (_, index) => ({ name: `方案${index}` }));
+    const ten = [...nine, { name: '已有方案' }];
+    const eleven = [...ten, { name: '管理员添加' }];
+
+    assert.doesNotThrow(() => assertUserUploadCapacity(nine, '新方案'));
+    assert.throws(
+        () => assertUserUploadCapacity(ten, '新方案'),
+        error => /最多拥有10个.*请先删除/.test(error.message) && error.userMessage === error.message
+    );
+    assert.doesNotThrow(() => assertUserUploadCapacity(ten, '已有方案'));
+    assert.doesNotThrow(() => assertUserUploadCapacity(eleven, '管理员添加'));
+    assert.throws(() => assertUserUploadCapacity(eleven, '另一个新方案'), /当前已有11个.*请先删除/);
 });
