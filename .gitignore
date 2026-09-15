@@ -52,6 +52,8 @@ word_hint0206/*.bak-*
 word_hint/
 solver_test.hpp
 test*
+!/test/
+!/test/**
 tmp*.txt
 dahao/
 saolei/

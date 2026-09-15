@@ -16,6 +16,7 @@ import { pipeline } from 'stream/promises';
 import path from 'node:path';
 import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
 import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
+import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -38,6 +39,18 @@ const word_hint = require('../build/Release/word_hint.node');
 // const page = await browser.newPage()
 const PAGE_NUM = 100
 const MAX_WORD_HINT_UPLOAD_BYTES = 512 * 1024 * 1024
+const adminDeleteConfirmations = new AdminDeleteConfirmationStore()
+const RESERVED_SCHEME_NAMES = new Set([
+    'a', '上传词提', '取消上传', '删除词提', '设置选重键', '设置最大码长',
+    '设置标点引导键', '码表列表', '查看方案配置', '码表管理', 'c', '查询统计'
+])
+
+function validateSchemeName(name) {
+    if (name.length < 2 || name.length > 10) throw new AdminCommandError('方案名称长度必须为 2 至 10 个字符。');
+    if ((/[\\/:*?"'<>|]/g).test(name) || RESERVED_SCHEME_NAMES.has(name)) {
+        throw new AdminCommandError('该方案名称是保留名称或包含禁用字符，请更换名称。');
+    }
+}
 function formatFileSize(bytes) {
     if (!Number.isFinite(bytes) || bytes < 0) return '未知';
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -654,6 +667,180 @@ async function updateSchemeConfigAtomically(name, mutate) {
         }
     } finally {
         if (!committed) removeDirectory(version.directory);
+    }
+}
+
+async function findRegisteredScheme(name) {
+    const [publicRows, privateRows] = await Promise.all([
+        run_mysql(`select * from public_word_base where name = ${mysql.escape(name)}`),
+        run_mysql(`select * from private_word_base where name = ${mysql.escape(name)}`)
+    ]);
+    if (publicRows.length + privateRows.length === 0) return null;
+    if (publicRows.length + privateRows.length !== 1) {
+        const err = new Error(`ambiguous scheme registration: ${name}`);
+        err.userMessage = '数据库中存在重复的同名登记，已拒绝操作，请先人工检查数据。';
+        throw err;
+    }
+    return publicRows.length === 1
+        ? { name, kind: 'public', qqid: null }
+        : { name, kind: 'private', qqid: String(privateRows[0].qqid) };
+}
+
+function sameRegisteredScheme(left, right) {
+    return left !== null && right !== null
+        && left.name === right.name && left.kind === right.kind && left.qqid === right.qqid;
+}
+
+async function getRepliedWordHintFile(e) {
+    if (!has_reply(e.message)) throw new AdminCommandError('请先发送一个离线 .txt 文件，再引用该文件发送上传命令。');
+    const replyId = get_reply(e.message);
+    if (typeof replyId === 'undefined') throw new AdminCommandError('无法找到所引用的消息，请重新发送离线文件后再试。');
+    let msg;
+    try {
+        msg = await bot.get_msg({ message_id: replyId });
+    } catch (_) {
+        throw new AdminCommandError('读取所引用的文件消息失败，请重新发送离线文件后再试。');
+    }
+    if (msg.message_type !== 'private') throw new AdminCommandError('引用的文件必须来自与机器人的私聊。');
+    const file = msg.message?.find(item => item.type === 'file');
+    if (!file) throw new AdminCommandError('引用的消息不是文件消息。');
+    const filename = String(file.data.file || '');
+    if (filename.slice(filename.lastIndexOf('.') + 1).toLowerCase() !== 'txt') {
+        throw new AdminCommandError('仅支持扩展名为 .txt 的码表文件。');
+    }
+    const size = Number(file.data.file_size);
+    if (!Number.isFinite(size) || size < 0) throw new AdminCommandError('无法读取文件大小，请重新发送离线文件后再试。');
+    if (size > MAX_WORD_HINT_UPLOAD_BYTES) {
+        throw new AdminCommandError(`文件大小为 ${formatFileSize(size)}，最大支持 512 MiB。`);
+    }
+    return { fileId: file.data.file_id, filename, size };
+}
+
+async function downloadAdminUploadVersion(command, file, version, task, replyUpload) {
+    task.phase = '下载文件';
+    const url = await bot.get_private_file_url({ file_id: file.fileId });
+    throwIfUploadSuperseded(task);
+    const response = await fetch(url.url, { signal: task.controller.signal });
+    if (!response.ok || !response.body) throw new Error(`download failed (${response.status})`);
+    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(`${version.base}.txt`), { signal: task.controller.signal });
+    throwIfUploadSuperseded(task);
+    task.phase = '等待操作锁';
+    await replyUpload(`管理员上传中...（2/4：等待处理）\n方案：${command.name}\n文件已下载，正在等待相关用户及方案操作锁。`);
+}
+
+async function buildAndValidateAdminHint(command, version, task, replyUpload, inheritedConfig) {
+    task.phase = '等待构建队列';
+    await buildHintAsync(path.resolve(version.base), {
+        signal: task.controller.signal,
+        onStart: () => {
+            task.phase = '构建 Hint';
+            return replyUpload(`管理员上传中...（3/4：构建 Hint）\n方案：${command.name}\n已取得全局构建槽位。`);
+        }
+    });
+    throwIfUploadSuperseded(task);
+    task.phase = '校验并发布';
+    await replyUpload(`管理员上传中...（4/4：校验并发布）\n方案：${command.name}\n正在校验并原子切换方案版本。`);
+    if (inheritedConfig !== null && !word_hint.set_ext(version.base, inheritedConfig)) {
+        throw new Error('cannot preserve scheme config');
+    }
+    word_hint.get_ext(version.base);
+    if (!word_hint.replace(version.base)) throw new Error('cannot mmap staged hint');
+    word_hint.remove(version.base);
+    return fs.statSync(`${version.base}.hint`).size;
+}
+
+async function publishAdminUpload(command, version, task, replyUpload) {
+    let result;
+    const publish = async ({ oldName, inheritedConfig, register }) => {
+        const hintSize = await buildAndValidateAdminHint(command, version, task, replyUpload, inheritedConfig);
+        throwIfUploadSuperseded(task);
+        const publication = publishSchemeVersion(command.name, version.directory);
+        try {
+            await refreshPublishedScheme(command.name, publication.oldBase);
+            throwIfUploadSuperseded(task);
+            task.phase = '登记方案';
+            task.cancelable = false;
+            await register();
+        } catch (err) {
+            await restorePublishedScheme(command.name, publication);
+            throw err;
+        }
+        result = { hintSize, oldName, publication };
+    };
+
+    if (command.kind === 'public') {
+        await withSchemeMutations([command.name], async () => {
+            const existing = await findRegisteredScheme(command.name);
+            assertAdminUploadTarget(command, existing);
+            const inheritedConfig = command.replace ? word_hint.get_ext(schemePath(command.name)) : null;
+            await publish({
+                oldName: command.replace ? command.name : null,
+                inheritedConfig,
+                register: () => command.replace
+                    ? Promise.resolve()
+                    : run_mysql(`insert into public_word_base (name) values (${mysql.escape(command.name)})`)
+            });
+        });
+    } else {
+        await withUserMutation(command.qqid, async () => {
+            const ownedRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(command.qqid)}`);
+            const oldName = ownedRows.length > 0 ? ownedRows[0].name : null;
+            await withSchemeMutations([command.name, oldName].filter(Boolean), async () => {
+                const currentRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(command.qqid)}`);
+                const currentOldName = currentRows.length > 0 ? currentRows[0].name : null;
+                if (currentOldName !== oldName) throw new Error('private scheme changed while admin upload was waiting');
+                const named = await findRegisteredScheme(command.name);
+                assertAdminUploadTarget(command, named, oldName);
+                const inheritedConfig = command.replace ? word_hint.get_ext(schemePath(oldName)) : null;
+                await publish({
+                    oldName,
+                    inheritedConfig,
+                    register: () => command.replace
+                        ? run_mysql(`update private_word_base set name = ${mysql.escape(command.name)} where qqid = ${mysql.escape(command.qqid)}`)
+                        : run_mysql(`insert into private_word_base (qqid, name) values (${mysql.escape(command.qqid)}, ${mysql.escape(command.name)})`)
+                });
+            });
+        });
+    }
+    return result;
+}
+
+async function runAdminUpload(e, command) {
+    validateSchemeName(command.name);
+    const file = await getRepliedWordHintFile(e);
+    const replyUpload = text => sendQuotedText(e, text, '管理员词提上传状态消息');
+    const task = beginLatestUserUpload(`admin:${e.sender.user_id}`, command.name);
+    const startedAt = Date.now();
+    let version = null;
+    let committed = false;
+    try {
+        await replyUpload(`管理员上传中...（1/4：下载文件）\n目标：${command.kind === 'public' ? '公共' : `私人 QQ ${command.qqid}`}\n方案：${command.name}\n模式：${command.replace ? '显式替换' : '新建'}\n文件：${file.filename}（${formatFileSize(file.size)}）`);
+        version = createSchemeVersion(command.name);
+        await downloadAdminUploadVersion(command, file, version, task, replyUpload);
+        const result = await publishAdminUpload(command, version, task, replyUpload);
+        committed = true;
+        task.phase = '清理旧版本';
+        try {
+            result.publication.cleanupPrevious();
+            if (result.oldName !== null && result.oldName !== command.name) {
+                const oldBase = schemePath(result.oldName);
+                word_hint.remove(oldBase);
+                await removeRegularWorkerScheme(oldBase);
+                removeSchemeStorage(result.oldName);
+            }
+        } catch (cleanupError) {
+            console.warn('管理员上传后的旧版本清理失败:', cleanupError.message || cleanupError);
+        }
+        await replyUpload(`管理员上传完成\n方案：${command.name}\n类型：${command.kind === 'public' ? '公共' : `私人（QQ ${command.qqid}）`}\n操作：${command.replace ? '替换' : '新建'}\nHint：${formatFileSize(result.hintSize)}\n用时：${((Date.now() - startedAt) / 1000).toFixed(1)} 秒\n新方案已经可以查询。`);
+    } catch (err) {
+        if (task.controller.signal.aborted) {
+            await replyUpload(`管理员上传已取消\n方案：${command.name}\n取消时阶段：${task.phase}\n临时文件已清理，原方案未被覆盖。`);
+        } else {
+            await replyUpload(`管理员上传失败\n方案：${command.name}\n失败阶段：${task.phase}\n原因：${err.userMessage || err.message || '未知错误'}\n临时文件将被清理，原方案和登记保持不变。`);
+        }
+    } finally {
+        if (!committed && version !== null) removeDirectory(version.directory);
+        finishLatestUserUpload(task);
     }
 }
 
@@ -1554,6 +1741,148 @@ bot.on("message", async e => {
     }
 });
 
+async function listAdminSchemes(e, command) {
+    const [publicRows, privateRows] = await Promise.all([
+        run_mysql('select name from public_word_base'),
+        run_mysql('select qqid, name from private_word_base')
+    ]);
+    let rows = [];
+    if (command.kind !== '私人') rows.push(...publicRows.map(row => ({ name: row.name, label: '公共' })));
+    if (command.kind !== '公共') rows.push(...privateRows.map(row => ({ name: row.name, label: `私人 QQ ${row.qqid}` })));
+    if (command.keyword) rows = rows.filter(row => String(row.name).includes(command.keyword));
+    rows.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'));
+    if (rows.length === 0) {
+        await sendQuotedText(e, '没有符合条件的码表。', '管理员码表列表');
+        return;
+    }
+    for (let i = 0; i < rows.length; i += 80) {
+        const body = rows.slice(i, i + 80).map(row => `[${row.label}] ${row.name}`).join('\n');
+        await sendQuotedText(e, `管理员码表列表（${i + 1}-${Math.min(i + 80, rows.length)} / ${rows.length}）\n${body}`, '管理员码表列表');
+    }
+}
+
+async function showAdminScheme(e, name) {
+    const registered = await findRegisteredScheme(name);
+    if (registered === null) throw new AdminCommandError('未找到该方案。');
+    const base = schemePath(name);
+    const fileLines = [];
+    for (const ext of ['.txt', '.hint', '.config']) {
+        try {
+            fileLines.push(`${ext.slice(1).toUpperCase()}：${formatFileSize(fs.statSync(base + ext).size)}`);
+        } catch (_) {
+            fileLines.push(`${ext.slice(1).toUpperCase()}：缺失`);
+        }
+    }
+    let configText;
+    try {
+        const config = word_hint.get_ext(base);
+        configText = `选重键：${config.candidate}\n最大码长：${config.maxlen}\n标点引导键：${config.punct || '无'}\n码元：${config.codeelem}`;
+    } catch (err) {
+        configText = `配置读取失败：${err.message || err}`;
+    }
+    await sendQuotedText(
+        e,
+        `方案：${name}\n类型：${registered.kind === 'public' ? '公共' : '私人'}${registered.qqid === null ? '' : `\n所属 QQ：${registered.qqid}`}\n${fileLines.join('\n')}\n${configText}`,
+        '管理员查看码表'
+    );
+}
+
+async function setAdminSchemeConfig(command) {
+    const expected = await findRegisteredScheme(command.name);
+    if (expected === null) throw new AdminCommandError('未找到该方案。');
+    const value = normalizeAdminConfigValue(command.field, command.value);
+    const operation = async () => withSchemeMutations([command.name], async () => {
+        const current = await findRegisteredScheme(command.name);
+        if (!sameRegisteredScheme(expected, current)) throw new AdminCommandError('方案登记在等待操作期间发生变化，请重试。');
+        await updateSchemeConfigAtomically(command.name, config => {
+            if (command.field === '选重键') config.candidate = value;
+            else if (command.field === '最大码长') config.maxlen = value;
+            else config.punct = value;
+        });
+    });
+    if (expected.kind === 'private') await withUserMutation(expected.qqid, operation);
+    else await operation();
+}
+
+async function deleteRegisteredScheme(expected) {
+    let cleanupError = null;
+    const operation = async () => withSchemeMutations([expected.name], async () => {
+        const current = await findRegisteredScheme(expected.name);
+        if (!sameRegisteredScheme(expected, current)) throw new AdminCommandError('方案登记已发生变化，确认码失效，请重新发起删除。');
+        if (expected.kind === 'public') {
+            await run_mysql(`delete from public_word_base where name = ${mysql.escape(expected.name)}`);
+        } else {
+            await run_mysql(`delete from private_word_base where qqid = ${mysql.escape(expected.qqid)} and name = ${mysql.escape(expected.name)}`);
+        }
+        const base = schemePath(expected.name);
+        try {
+            word_hint.remove(base);
+            await removeRegularWorkerScheme(base);
+            removeSchemeStorage(expected.name);
+        } catch (err) {
+            cleanupError = err;
+            console.warn('管理员删除词提后的文件清理失败:', err.message || err);
+        }
+    });
+    if (expected.kind === 'private') await withUserMutation(expected.qqid, operation);
+    else await operation();
+    return cleanupError;
+}
+
+async function handleAdminDeleteRequest(e, name) {
+    const registered = await findRegisteredScheme(name);
+    if (registered === null) throw new AdminCommandError('未找到该方案。');
+    const token = adminDeleteConfirmations.create(e.sender.user_id, registered);
+    await sendQuotedText(
+        e,
+        `删除尚未执行\n方案：${registered.name}\n类型：${registered.kind === 'public' ? '公共' : `私人（QQ ${registered.qqid}）`}\n确认码：${token}\n请在 5 分钟内发送：码表管理 确认删除 ${token}`,
+        '管理员删除确认'
+    );
+}
+
+async function handleAdminDeleteConfirmation(e, token) {
+    const scheme = adminDeleteConfirmations.consume(e.sender.user_id, token);
+    const cleanupError = await deleteRegisteredScheme(scheme);
+    await sendQuotedText(
+        e,
+        cleanupError
+            ? `方案“${scheme.name}”的数据库登记已删除，已不可查询，但残留文件清理失败，请检查日志。`
+            : `方案“${scheme.name}”已删除。`,
+        '管理员删除结果'
+    );
+}
+
+bot.on("message.private", async e => {
+    if (!isWordHintAdmin(e.sender.user_id)) return;
+    const text = (await get_text_content_from_msg(e.message, false)).join('').trim();
+    if (text !== '码表管理' && !text.startsWith('码表管理 ')) return;
+    try {
+        const command = parseWordHintAdminCommand(text);
+        if (command.action === 'help') await sendQuotedText(e, WORD_HINT_ADMIN_HELP, '管理员码表帮助');
+        else if (command.action === 'list') await listAdminSchemes(e, command);
+        else if (command.action === 'show') await showAdminScheme(e, command.name);
+        else if (command.action === 'upload') await runAdminUpload(e, command);
+        else if (command.action === 'cancel-upload') {
+            const result = cancelLatestUserUpload(`admin:${e.sender.user_id}`);
+            const message = result.state === 'none'
+                ? '当前没有管理员上传任务。'
+                : result.state === 'committing'
+                    ? `无法取消：方案“${result.name}”已经进入最终登记阶段。`
+                    : result.state === 'cancelling'
+                        ? `方案“${result.name}”的取消请求正在处理中。`
+                        : `已接受方案“${result.name}”的取消请求，正在停止任务并清理临时文件。`;
+            await sendQuotedText(e, message, '管理员取消上传');
+        } else if (command.action === 'set') {
+            await setAdminSchemeConfig(command);
+            await sendQuotedText(e, `方案“${command.name}”的${command.field}已设置。`, '管理员设置配置');
+        } else if (command.action === 'delete') await handleAdminDeleteRequest(e, command.name);
+        else if (command.action === 'confirm-delete') await handleAdminDeleteConfirmation(e, command.token);
+    } catch (err) {
+        console.warn('管理员码表命令失败:', err.message || err);
+        await sendQuotedText(e, `码表管理失败：${err.userMessage || err.message || '未知错误'}`, '管理员码表错误');
+    }
+});
+
 bot.on("message.private", async e => {
     try {
         let strs = "";
@@ -1693,76 +2022,26 @@ bot.on("message.private", async e => {
         }
         else if (strs[0] === '上传词提') {
             const replyUpload = text => sendQuotedText(e, text, '词提上传状态消息');
-            if (!has_reply(e.message)) {
-                await replyUpload('上传请求未受理：请先发送一个离线 .txt 文件，再引用该文件发送“上传词提 方案名称”。');
-
-                return;
-            }
-
             if (strs.length < 2) {
                 await replyUpload('上传请求未受理：缺少方案名称。\n正确格式：上传词提 方案名称');
                 return;
             }
-            let id = get_reply(e.message)
-            // console.log(id)
-            if (typeof id === "undefined") {
-                await replyUpload('上传请求未受理：无法找到所引用的消息，请重新发送离线文件后再试。');
-                return;
-            }
-            // console.log("测试");
-            let msg;
-            try {
-                msg = await bot.get_msg({ message_id: id });
-            } catch (getMessageError) {
-                await replyUpload('上传请求未受理：读取所引用的文件消息失败，请重新发送离线文件后再试。');
-                return;
-            }
-            // console.log("测试");
-            if (msg.message_type !== 'private') {
-                await replyUpload('上传请求未受理：引用的文件必须来自与机器人的私聊。');
-                return;
-            }
-            if (msg.message.length < 1) {
-                await replyUpload('上传请求未受理：引用的消息没有可读取的内容，请重新发送文件。');
-                return;
-            }
-            if (msg.message[0].type !== 'file') {
-                await replyUpload('上传请求未受理：引用的消息不是文件消息。');
-                return;
-            }
-
-            const repliedFileName = String(msg.message[0].data.file || '');
-            let ext = repliedFileName.slice(repliedFileName.lastIndexOf('.') + 1);
-
-            if (ext !== 'txt') {
-                await replyUpload('上传请求未受理：仅支持扩展名为 .txt 的码表文件。');
-                return;
-            }
-            const sourceFileSize = Number(msg.message[0].data.file_size);
-            if (!Number.isFinite(sourceFileSize) || sourceFileSize < 0) {
-                await replyUpload('上传请求未受理：无法读取文件大小，请重新发送离线文件后再试。');
-                return;
-            }
-            if (sourceFileSize > MAX_WORD_HINT_UPLOAD_BYTES) {
-                await replyUpload(`上传请求未受理：文件大小为 ${formatFileSize(sourceFileSize)}，最大支持 512 MiB。`);
-                return;
-            }
-
-            // console.log("上传词提");
-
-
-
             let name = strs[1];
-            if (name.length < 2 || name.length > 10) {
-                await replyUpload('上传请求未受理：方案名称长度必须为 2 至 10 个字符。');
+            try {
+                validateSchemeName(name);
+            } catch (validationError) {
+                await replyUpload(`上传请求未受理：${validationError.message}`);
                 return;
             }
-            // console.log("1111");
-            if (name === 'a' || (/[\\\\/:*?\"\'<>|]/g).test(strs[1]) || name === '上传词提' || name === '取消上传' || name === '删除词提' || name === '设置选重键' || name === '设置最大码长' || name === '设置标点引导键' || name === '码表列表' || name === '查看方案配置' || name === 'c' || name === '查询统计') {
-                await replyUpload('上传请求未受理：该方案名称是保留名称或包含禁用字符，请更换名称。');
+            let uploadFile;
+            try {
+                uploadFile = await getRepliedWordHintFile(e);
+            } catch (fileError) {
+                await replyUpload(`上传请求未受理：${fileError.message}`);
                 return;
             }
-            const sourceFileName = repliedFileName;
+            const sourceFileName = uploadFile.filename;
+            const sourceFileSize = uploadFile.size;
             const uploadStartedAt = Date.now();
             const userId = String(e.sender.user_id);
             const uploadTask = beginLatestUserUpload(userId, name);
@@ -1787,7 +2066,7 @@ bot.on("message.private", async e => {
                 }
             };
             try {
-                const url = await bot.get_private_file_url({ file_id: msg.message[0].data.file_id });
+                const url = await bot.get_private_file_url({ file_id: uploadFile.fileId });
                 throwIfUploadSuperseded(uploadTask);
                 uploadTask.phase = '创建临时版本';
                 version = createSchemeVersion(name);
