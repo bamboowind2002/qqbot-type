@@ -14,7 +14,7 @@ import { configureRegularWorkers, removeRegularWorkerScheme, replaceRegularWorke
 import { Readable } from 'node:stream';
 import { pipeline } from 'stream/promises';
 import path from 'node:path';
-import { buildHintAsync, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
+import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
 import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
@@ -38,6 +38,24 @@ const word_hint = require('../build/Release/word_hint.node');
 // const page = await browser.newPage()
 const PAGE_NUM = 100
 const MAX_WORD_HINT_UPLOAD_BYTES = 512 * 1024 * 1024
+function formatFileSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '未知';
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+async function sendQuotedText(e, text, label = '消息') {
+    try {
+        return await bot.send_msg({
+            message_type: e.message_type,
+            user_id: e.user_id,
+            group_id: e.group_id,
+            message: [Structs.reply(e.message_id), Structs.text(text)]
+        });
+    } catch (err) {
+        console.warn(`${label}发送失败:`, err.message || err);
+        return null;
+    }
+}
 async function word_hint_solve_simple_regular(reg_txt, schema, range = { l: 0, r: 100 }) {
     try {
         let res = await runRegularWithTimeout('simple', [reg_txt, schema, range], 15000)
@@ -1546,6 +1564,31 @@ bot.on("message.private", async e => {
             }
         }
         strs = strs.trim().split(/\s+/);
+        if (strs[0] === '取消上传') {
+            const result = cancelLatestUserUpload(e.sender.user_id);
+            if (result.state === 'none') {
+                await sendQuotedText(e, '当前没有正在下载、排队、构建或发布的词提上传任务。', '取消上传回复');
+            } else if (result.state === 'cancelling') {
+                await sendQuotedText(
+                    e,
+                    `上传取消处理中\n方案：${result.name}\n当前阶段：${result.phase || '清理临时文件'}\n任务已经收到取消请求，请等待原上传消息返回最终取消结果。`,
+                    '取消上传回复'
+                );
+            } else if (result.state === 'committing') {
+                await sendQuotedText(
+                    e,
+                    `无法取消上传\n方案：${result.name}\n当前阶段：${result.phase || '最终登记'}\n原因：任务已经进入不可安全中断的最终登记阶段。它会先完成；如果需要替换，可以直接提交新的上传。`,
+                    '取消上传回复'
+                );
+            } else {
+                await sendQuotedText(
+                    e,
+                    `已接受取消请求\n方案：${result.name}\n取消时阶段：${result.phase || '处理中'}\n正在停止任务并清理临时文件；原上传消息稍后会收到取消结果。`,
+                    '取消上传回复'
+                );
+            }
+            return;
+        }
         if (strs[0] === '删除词提') {
             const userId = String(e.sender.user_id);
             const deleted = await withUserMutation(userId, async () => {
@@ -1649,46 +1692,59 @@ bot.on("message.private", async e => {
             e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '上传词提') {
+            const replyUpload = text => sendQuotedText(e, text, '词提上传状态消息');
             if (!has_reply(e.message)) {
-                e.quick_action([Structs.text('没有回复任何消息，请回复一个文件消息。')]);
+                await replyUpload('上传请求未受理：请先发送一个离线 .txt 文件，再引用该文件发送“上传词提 方案名称”。');
 
                 return;
             }
 
             if (strs.length < 2) {
-                e.quick_action([Structs.text('请输入方案名称')]);
+                await replyUpload('上传请求未受理：缺少方案名称。\n正确格式：上传词提 方案名称');
                 return;
             }
             let id = get_reply(e.message)
             // console.log(id)
             if (typeof id === "undefined") {
-                e.quick_action([Structs.text('无法找到所回复的消息，请重新上传离线文件。')]);
+                await replyUpload('上传请求未受理：无法找到所引用的消息，请重新发送离线文件后再试。');
                 return;
             }
             // console.log("测试");
-            let msg = await bot.get_msg({ message_id: id });
+            let msg;
+            try {
+                msg = await bot.get_msg({ message_id: id });
+            } catch (getMessageError) {
+                await replyUpload('上传请求未受理：读取所引用的文件消息失败，请重新发送离线文件后再试。');
+                return;
+            }
             // console.log("测试");
             if (msg.message_type !== 'private') {
-                e.quick_action([Structs.text('所回复的消息不是私聊消息。')]);
+                await replyUpload('上传请求未受理：引用的文件必须来自与机器人的私聊。');
                 return;
             }
             if (msg.message.length < 1) {
-                e.quick_action([Structs.text('所回复的消息链长度为0')]);
+                await replyUpload('上传请求未受理：引用的消息没有可读取的内容，请重新发送文件。');
                 return;
             }
             if (msg.message[0].type !== 'file') {
-                e.quick_action([Structs.text('所回复的消息不是文件消息。')]);
+                await replyUpload('上传请求未受理：引用的消息不是文件消息。');
                 return;
             }
 
-            let ext = msg.message[0].data.file.slice(msg.message[0].data.file.lastIndexOf('.') + 1);
+            const repliedFileName = String(msg.message[0].data.file || '');
+            let ext = repliedFileName.slice(repliedFileName.lastIndexOf('.') + 1);
 
             if (ext !== 'txt') {
-                e.quick_action([Structs.text("此文件非txt格式！")]);
+                await replyUpload('上传请求未受理：仅支持扩展名为 .txt 的码表文件。');
                 return;
             }
-            if (Number(msg.message[0].data.file_size) > MAX_WORD_HINT_UPLOAD_BYTES) {
-                e.quick_action([Structs.text('文件过大，最大支持512 MiB')]);
+            const sourceFileSize = Number(msg.message[0].data.file_size);
+            if (!Number.isFinite(sourceFileSize) || sourceFileSize < 0) {
+                await replyUpload('上传请求未受理：无法读取文件大小，请重新发送离线文件后再试。');
+                return;
+            }
+            if (sourceFileSize > MAX_WORD_HINT_UPLOAD_BYTES) {
+                await replyUpload(`上传请求未受理：文件大小为 ${formatFileSize(sourceFileSize)}，最大支持 512 MiB。`);
                 return;
             }
 
@@ -1698,29 +1754,66 @@ bot.on("message.private", async e => {
 
             let name = strs[1];
             if (name.length < 2 || name.length > 10) {
-                e.quick_action([Structs.text('名字长度需在2字至10字之间')]);
+                await replyUpload('上传请求未受理：方案名称长度必须为 2 至 10 个字符。');
                 return;
             }
             // console.log("1111");
-            if (name === 'a' || (/[\\\\/:*?\"\'<>|]/g).test(strs[1]) || name === '上传词提' || name === '删除词提' || name === '设置选重键' || name === '设置最大码长' || name === '设置标点引导键' || name === '码表列表' || name === '查看方案配置' || name === 'c' || name === '查询统计') {
-                e.quick_action([Structs.text('禁止使用该名字！')]);
+            if (name === 'a' || (/[\\\\/:*?\"\'<>|]/g).test(strs[1]) || name === '上传词提' || name === '取消上传' || name === '删除词提' || name === '设置选重键' || name === '设置最大码长' || name === '设置标点引导键' || name === '码表列表' || name === '查看方案配置' || name === 'c' || name === '查询统计') {
+                await replyUpload('上传请求未受理：该方案名称是保留名称或包含禁用字符，请更换名称。');
                 return;
             }
-            e.quick_action([Structs.text("上传中...")]);
-            const url = await bot.get_private_file_url({ file_id: msg.message[0].data.file_id })
+            const sourceFileName = repliedFileName;
+            const uploadStartedAt = Date.now();
             const userId = String(e.sender.user_id);
-            const version = createSchemeVersion(name);
+            const uploadTask = beginLatestUserUpload(userId, name);
+            const previousTaskText = uploadTask.previousState === 'cancelled'
+                ? `\n已取消你此前尚未完成的上传“${uploadTask.previousName}”。`
+                : uploadTask.previousState === 'committing'
+                    ? `\n你此前的上传“${uploadTask.previousName}”已进入最终登记阶段，无法安全中断；本任务会排在其后并覆盖它。`
+                    : '';
+            await replyUpload(
+                `上传中...（1/4：下载文件）\n方案：${name}\n文件：${sourceFileName}\n大小：${formatFileSize(sourceFileSize)}${previousTaskText}\n正在下载文件。同一用户的新上传会取消此前尚未进入最终登记阶段的上传。`
+            );
+            let version = null;
             let committed = false;
+            let uploadResult = null;
+            uploadTask.phase = '获取文件下载地址';
+            const cleanupUploadVersion = () => {
+                if (committed || version === null) return;
+                try {
+                    removeDirectory(version.directory);
+                } catch (cleanupError) {
+                    console.warn('上传失败后的临时目录清理失败:', cleanupError.message || cleanupError);
+                }
+            };
             try {
-                const response = await fetch(url.url);
+                const url = await bot.get_private_file_url({ file_id: msg.message[0].data.file_id });
+                throwIfUploadSuperseded(uploadTask);
+                uploadTask.phase = '创建临时版本';
+                version = createSchemeVersion(name);
+                throwIfUploadSuperseded(uploadTask);
+                uploadTask.phase = '下载文件';
+                const response = await fetch(url.url, { signal: uploadTask.controller.signal });
                 if (!response.ok || !response.body) throw new Error(`download failed (${response.status})`);
-                await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(`${version.base}.txt`));
+                await pipeline(
+                    Readable.fromWeb(response.body),
+                    fs.createWriteStream(`${version.base}.txt`),
+                    { signal: uploadTask.controller.signal }
+                );
+                throwIfUploadSuperseded(uploadTask);
+                uploadTask.phase = '等待用户和方案操作锁';
+                await replyUpload(
+                    `上传中...（2/4：等待处理）\n方案：${name}\n文件已下载完成，正在等待该用户及方案的操作锁。等待期间，原方案仍可正常查询。`
+                );
 
                 await withUserMutation(userId, async () => {
+                    throwIfUploadSuperseded(uploadTask);
                     const ownedRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
                     const oldName = ownedRows.length > 0 ? ownedRows[0].name : null;
 
                     await withSchemeMutations([name, oldName].filter(Boolean), async () => {
+                        throwIfUploadSuperseded(uploadTask);
+                        uploadTask.phase = '检查方案名称和归属';
                         // Only checks made while holding both locks authorize
                         // publication. This closes the old check/use race.
                         const [publicRows, otherPrivateRows, currentOwnedRows] = await Promise.all([
@@ -1728,6 +1821,7 @@ bot.on("message.private", async e => {
                             run_mysql(`select * from private_word_base where name = ${mysql.escape(name)} and qqid != ${mysql.escape(userId)}`),
                             run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`)
                         ]);
+                        throwIfUploadSuperseded(uploadTask);
                         if (publicRows.length > 0) {
                             const err = new Error('public scheme name is occupied');
                             err.userMessage = '该名字已在公共码表中被使用';
@@ -1742,17 +1836,40 @@ bot.on("message.private", async e => {
                         if (currentOldName !== oldName) throw new Error('private scheme changed while upload was waiting');
 
                         const config = oldName === null ? null : word_hint.get_ext(schemePath(oldName));
-                        await buildHintAsync(path.resolve(version.base));
+                        uploadTask.phase = '等待构建队列';
+                        await buildHintAsync(path.resolve(version.base), {
+                            signal: uploadTask.controller.signal,
+                            onStart: () => {
+                                uploadTask.phase = '构建 Hint';
+                                return replyUpload(
+                                    `上传中...（3/4：构建 Hint）\n方案：${name}\n已轮到本任务，正在生成查询文件。大码表可能需要数分钟，请耐心等待。`
+                                );
+                            }
+                        });
+                        throwIfUploadSuperseded(uploadTask);
+                        uploadTask.phase = '校验并发布';
+                        await replyUpload(
+                            `上传中...（4/4：校验并发布）\n方案：${name}\nHint 已构建完成，正在校验文件并原子切换方案版本。`
+                        );
                         if (config !== null && !word_hint.set_ext(version.base, config)) {
                             throw new Error('cannot preserve scheme config');
                         }
                         word_hint.get_ext(version.base);
                         if (!word_hint.replace(version.base)) throw new Error('cannot mmap staged hint');
                         word_hint.remove(version.base);
+                        const builtHintSize = fs.statSync(`${version.base}.hint`).size;
+                        throwIfUploadSuperseded(uploadTask);
 
                         const publication = publishSchemeVersion(name, version.directory);
                         try {
                             await refreshPublishedScheme(name, publication.oldBase);
+                            throwIfUploadSuperseded(uploadTask);
+                            uploadTask.phase = '登记方案';
+                            // From this point a database statement may commit
+                            // even if an AbortSignal fires. Finish this tiny
+                            // atomic publication tail, then let the new upload
+                            // overwrite it under the same user lock.
+                            uploadTask.cancelable = false;
                             if (oldName !== null) {
                                 await run_mysql(`update private_word_base set name = ${mysql.escape(name)} where qqid = ${mysql.escape(userId)}`);
                             } else {
@@ -1764,6 +1881,8 @@ bot.on("message.private", async e => {
                         }
 
                         committed = true;
+                        uploadResult = { oldName, hintSize: builtHintSize };
+                        uploadTask.phase = '清理旧版本';
                         try {
                             publication.cleanupPrevious();
                             if (oldName !== null && oldName !== name) {
@@ -1777,13 +1896,34 @@ bot.on("message.private", async e => {
                         }
                     });
                 });
-                e.quick_action([Structs.text('上传完毕')]);
+                const resultText = uploadResult.oldName === null
+                    ? '已创建新的私人词提方案。'
+                    : uploadResult.oldName === name
+                        ? '已用本次文件更新同名方案。'
+                        : `已将原方案“${uploadResult.oldName}”替换为“${name}”，原方案文件已清理。`;
+                await replyUpload(
+                    `上传完成\n方案：${name}\n源文件：${sourceFileName}（${formatFileSize(sourceFileSize)}）\nHint：${formatFileSize(uploadResult.hintSize)}\n用时：${((Date.now() - uploadStartedAt) / 1000).toFixed(1)} 秒\n结果：${resultText}\n新方案已经可以查询。`
+                );
             }
             catch (err) {
                 console.log(err)
-                e.quick_action([Structs.text(err.userMessage || "上传失败，可能原因：词提格式不正确")]);
+                cleanupUploadVersion();
+                if (uploadTask.controller.signal.aborted) {
+                    const abortReason = uploadTask.controller.signal.reason;
+                    const reasonText = abortReason?.code === 'UPLOAD_CANCELLED'
+                        ? '你发送了“取消上传”命令。'
+                        : `你又提交了新的上传请求“${abortReason?.replacementName || '新的方案'}”。`;
+                    await replyUpload(
+                        `上传已取消\n原任务方案：${name}\n取消时阶段：${uploadTask.phase}\n原因：${reasonText}\n处理结果：本任务的临时文件已清理，尚未覆盖原有方案。`
+                    );
+                } else {
+                    await replyUpload(
+                        `上传失败\n方案：${name}\n失败阶段：${uploadTask.phase}\n原因：${err.userMessage || '文件下载、码表格式检查、Hint 构建或发布过程中发生错误。'}\n处理结果：临时文件已清理；如果原来已有方案，原方案不会被本次失败覆盖。`
+                    );
+                }
             } finally {
-                if (!committed) removeDirectory(version.directory);
+                cleanupUploadVersion();
+                finishLatestUserUpload(uploadTask);
             }
 
         }
