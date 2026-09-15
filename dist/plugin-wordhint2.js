@@ -17,6 +17,7 @@ import path from 'node:path';
 import { beginLatestUserUpload, buildHintAsync, cancelLatestUserUpload, finishLatestUserUpload, throwIfUploadSuperseded, withSchemeMutations, withUserMutation } from './hintBuildManager.js';
 import { createSchemeVersion, linkOrCopy, publishSchemeVersion, removeDirectory, removeSchemeStorage, schemePath } from './hintSchemeStorage.js';
 import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarget, extractDirectAdminCommandText, isWordHintAdmin, normalizeAdminConfigValue, parseWordHintAdminCommand, WORD_HINT_ADMIN_HELP } from './wordHintAdmin.js';
+import { resolveOwnedScheme, resolveUserConfigSelection } from './wordHintUser.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -42,7 +43,7 @@ const MAX_WORD_HINT_UPLOAD_BYTES = 512 * 1024 * 1024
 const adminDeleteConfirmations = new AdminDeleteConfirmationStore()
 const RESERVED_SCHEME_NAMES = new Set([
     'a', '上传词提', '取消上传', '删除词提', '设置选重键', '设置最大码长',
-    '设置标点引导键', '码表列表', '查看方案配置', '码表管理', 'c', '查询统计'
+    '设置标点引导键', '码表列表', '查询码表', '查看方案配置', '码表管理', 'c', '查询统计'
 ])
 
 function validateSchemeName(name) {
@@ -691,6 +692,10 @@ function sameRegisteredScheme(left, right) {
         && left.name === right.name && left.kind === right.kind && left.qqid === right.qqid;
 }
 
+async function getOwnedPrivateSchemes(qqid) {
+    return run_mysql(`select name from private_word_base where qqid = ${mysql.escape(String(qqid))} order by name`);
+}
+
 async function getRepliedWordHintFile(e) {
     if (!has_reply(e.message)) throw new AdminCommandError('请先发送一个离线 .txt 文件，再引用该文件发送上传命令。');
     const replyId = get_reply(e.message);
@@ -783,20 +788,15 @@ async function publishAdminUpload(command, version, task, replyUpload) {
         });
     } else {
         await withUserMutation(command.qqid, async () => {
-            const ownedRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(command.qqid)}`);
-            const oldName = ownedRows.length > 0 ? ownedRows[0].name : null;
-            await withSchemeMutations([command.name, oldName].filter(Boolean), async () => {
-                const currentRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(command.qqid)}`);
-                const currentOldName = currentRows.length > 0 ? currentRows[0].name : null;
-                if (currentOldName !== oldName) throw new Error('private scheme changed while admin upload was waiting');
+            await withSchemeMutations([command.name], async () => {
                 const named = await findRegisteredScheme(command.name);
-                assertAdminUploadTarget(command, named, oldName);
-                const inheritedConfig = command.replace ? word_hint.get_ext(schemePath(oldName)) : null;
+                assertAdminUploadTarget(command, named);
+                const inheritedConfig = command.replace ? word_hint.get_ext(schemePath(command.name)) : null;
                 await publish({
-                    oldName,
+                    oldName: command.replace ? command.name : null,
                     inheritedConfig,
                     register: () => command.replace
-                        ? run_mysql(`update private_word_base set name = ${mysql.escape(command.name)} where qqid = ${mysql.escape(command.qqid)}`)
+                        ? Promise.resolve()
                         : run_mysql(`insert into private_word_base (qqid, name) values (${mysql.escape(command.qqid)}, ${mysql.escape(command.name)})`)
                 });
             });
@@ -1706,6 +1706,56 @@ bot.on("message", async e => {
     }
 });
 
+bot.on("message", async e => {
+    try {
+        const text = (await get_text_content_from_msg(e.message, false)).join('').trim();
+        const parts = text.split(/\s+/).filter(Boolean);
+        if (parts[0] !== '查询码表') return;
+        if (parts.length > 2) {
+            await sendQuotedText(e, '正确格式：查询码表 [QQ号|公共]', '查询码表回复');
+            return;
+        }
+        const target = parts[1] || String(e.sender.user_id);
+        let rows;
+        let owner;
+        if (target === '公共') {
+            rows = await run_mysql('select name from public_word_base order by name');
+            owner = '公共';
+        } else {
+            if (!/^\d{5,12}$/.test(target)) {
+                await sendQuotedText(e, '查询对象必须是完整 QQ 号或“公共”。\n正确格式：查询码表 [QQ号|公共]', '查询码表回复');
+                return;
+            }
+            rows = await getOwnedPrivateSchemes(target);
+            owner = target;
+        }
+        if (rows.length === 0) {
+            await sendQuotedText(e, owner === '公共' ? '当前没有公共码表。' : `QQ ${owner} 没有私人码表。`, '查询码表回复');
+            return;
+        }
+        const loginInfo = await bot.get_login_info();
+        const nodes = rows.map(row => ({
+            type: 'node',
+            data: {
+                user_id: owner === '公共' ? loginInfo.user_id : Number(owner),
+                nickname: owner === '公共' ? String(loginInfo.user_id) : String(owner),
+                content: Structs.text(String(row.name))
+            }
+        }));
+        for (let i = 0; i < nodes.length; i += 100) {
+            const messages = nodes.slice(i, i + 100);
+            if (e.message_type === 'group') {
+                await bot.send_group_forward_msg({ group_id: e.group_id, messages });
+            } else {
+                await bot.send_private_forward_msg({ user_id: e.user_id, messages });
+            }
+        }
+    } catch (err) {
+        console.warn('查询码表失败:', err.message || err);
+        await sendQuotedText(e, '查询码表失败，请稍后重试。', '查询码表回复');
+    }
+});
+
 
 bot.on("message", async e => {
     // return;
@@ -1788,13 +1838,12 @@ async function showAdminScheme(e, name) {
 }
 
 async function lookupAdminPrivateSchemeByQq(e, qqid) {
-    const rows = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(qqid)}`);
+    const rows = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(qqid)} order by name`);
     if (rows.length === 0) {
         await sendQuotedText(e, `QQ：${qqid}\n未登记私人方案。`, '管理员按 QQ 查询码表');
         return;
     }
-    if (rows.length !== 1) throw new AdminCommandError('该 QQ 存在多条私人方案登记，请先人工检查数据库。');
-    await sendQuotedText(e, `QQ：${qqid}\n私人方案：${rows[0].name}`, '管理员按 QQ 查询码表');
+    await sendQuotedText(e, `QQ：${qqid}\n私人方案（${rows.length}）：\n${rows.map(row => row.name).join('\n')}`, '管理员按 QQ 查询码表');
 }
 
 async function setAdminSchemeConfig(command) {
@@ -1874,7 +1923,7 @@ bot.on("message.private", async e => {
         else if (command.action === 'lookup-qq') await lookupAdminPrivateSchemeByQq(e, command.qqid);
         else if (command.action === 'upload') await runAdminUpload(e, command);
         else if (command.action === 'cancel-upload') {
-            const result = cancelLatestUserUpload(`admin:${e.sender.user_id}`);
+            const result = cancelLatestUserUpload(`admin:${e.sender.user_id}`, command.name);
             const message = result.state === 'none'
                 ? '当前没有管理员上传任务。'
                 : result.state === 'committing'
@@ -1905,7 +1954,11 @@ bot.on("message.private", async e => {
         }
         strs = strs.trim().split(/\s+/);
         if (strs[0] === '取消上传') {
-            const result = cancelLatestUserUpload(e.sender.user_id);
+            if (strs.length > 2) {
+                await sendQuotedText(e, '正确格式：取消上传 [方案名]', '取消上传回复');
+                return;
+            }
+            const result = cancelLatestUserUpload(e.sender.user_id, strs[1] || null);
             if (result.state === 'none') {
                 await sendQuotedText(e, '当前没有正在下载、排队、构建或发布的词提上传任务。', '取消上传回复');
             } else if (result.state === 'cancelling') {
@@ -1930,111 +1983,129 @@ bot.on("message.private", async e => {
             return;
         }
         if (strs[0] === '删除词提') {
+            if (strs.length > 2) {
+                await sendQuotedText(e, '正确格式：删除词提 [方案名]', '删除词提回复');
+                return;
+            }
             const userId = String(e.sender.user_id);
-            const deleted = await withUserMutation(userId, async () => {
-                const records = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                if (records.length <= 0) return false;
-                const name = records[0].name;
-                return withSchemeMutations([name], async () => {
-                    // Re-read after acquiring the scheme lock: an upload that
-                    // was already running may have renamed this user's scheme.
-                    const current = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    if (current.length <= 0) return false;
-                    if (current[0].name !== name) throw new Error('private scheme changed while deleting');
-                    const base = schemePath(name);
-                    await run_mysql(`delete from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    try {
-                        word_hint.remove(base);
-                        await removeRegularWorkerScheme(base);
-                        removeSchemeStorage(name);
-                    } catch (cleanupError) {
-                        // Registration is already gone, so leftovers are
-                        // unreachable and must not turn a successful delete
-                        // into a misleading failure response.
-                        console.warn('已删除词提的文件清理失败:', cleanupError.message || cleanupError);
-                    }
-                    return true;
+            try {
+                const deletedName = await withUserMutation(userId, async () => {
+                    const records = await getOwnedPrivateSchemes(userId);
+                    const name = resolveOwnedScheme(records, strs[1] || null, '删除词提 <方案名>');
+                    return withSchemeMutations([name], async () => {
+                        const current = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(userId)} and name = ${mysql.escape(name)}`);
+                        if (current.length !== 1) throw new AdminCommandError('方案登记在等待操作期间发生变化，请重试。');
+                        const base = schemePath(name);
+                        await run_mysql(`delete from private_word_base where qqid = ${mysql.escape(userId)} and name = ${mysql.escape(name)}`);
+                        try {
+                            word_hint.remove(base);
+                            await removeRegularWorkerScheme(base);
+                            removeSchemeStorage(name);
+                        } catch (cleanupError) {
+                            // Registration is already gone, so leftovers are
+                            // unreachable and must not turn a successful delete
+                            // into a misleading failure response.
+                            console.warn('已删除词提的文件清理失败:', cleanupError.message || cleanupError);
+                        }
+                        return name;
+                    });
                 });
-            });
-            e.quick_action([Structs.text(deleted ? "删除成功" : "未找到您上传的词提")]);
+                e.quick_action([Structs.text(`方案“${deletedName}”删除成功`)]);
+            } catch (err) {
+                e.quick_action([Structs.text(err.message || '删除失败')]);
+            }
             return;
         }
         if (strs[0] === '查看方案配置') {
-            let que = await run_mysql(`select * from private_word_base where qqid = '${mysql.escape(e.sender.user_id)}'`);
-            if (que.length <= 0) {
-                e.quick_action([Structs.text("请先上传词提")]);
-                return;
+            if (strs.length > 2) {
+                e.quick_action([Structs.text('正确格式：查看方案配置 [方案名]')]);
+            } else {
+                try {
+                    const rows = await getOwnedPrivateSchemes(e.sender.user_id);
+                    const name = resolveOwnedScheme(rows, strs[1] || null, '查看方案配置 <方案名>');
+                    const config = word_hint.get_ext(schemePath(name));
+                    e.quick_action([Structs.text(`方案：${name}\n选重键：${config.candidate}\n最大码长：${config.maxlen}\n标点引导键：${config.punct || '无'}`)]);
+                } catch (err) {
+                    e.quick_action([Structs.text(err.message || '配置读取失败')]);
+                }
             }
-            let config = word_hint.get_ext(schemePath(que[0].name));
-            e.quick_action([Structs.text(`选重键：${config.candidate}\n最大码长：${config.maxlen}\n标点引导键：${config.punct}`)]);
+            return;
         }
         if (strs.length < 1)
             return;
         if (strs[0] === '设置选重键') {
             const userId = String(e.sender.user_id);
-            const changed = await withUserMutation(userId, async () => {
-                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                if (que.length <= 0) return false;
-                return withSchemeMutations([que[0].name], async () => {
-                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    if (que.length <= 0) return false;
-                    await updateSchemeConfigAtomically(que[0].name, config => {
-                        config.candidate = strs.length < 2 ? '_;\'34567890' : strs[1];
+            try {
+                const changedName = await withUserMutation(userId, async () => {
+                    const rows = await getOwnedPrivateSchemes(userId);
+                    const args = strs.slice(1);
+                    const selection = resolveUserConfigSelection(rows, args, '设置选重键 <方案名> <值|默认>');
+                    const { name } = selection;
+                    const value = normalizeAdminConfigValue('选重键', selection.value || '默认');
+                    return withSchemeMutations([name], async () => {
+                        const current = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(userId)} and name = ${mysql.escape(name)}`);
+                        if (current.length !== 1) throw new AdminCommandError('方案登记在等待操作期间发生变化，请重试。');
+                        await updateSchemeConfigAtomically(name, config => {
+                            config.candidate = value;
+                        });
+                        return name;
                     });
-                    return true;
                 });
-            });
-            if (!changed) {
-                e.quick_action([Structs.text("请先上传词提")]);
-                return;
+                e.quick_action([Structs.text(`方案“${changedName}”设置完毕`)]);
+            } catch (err) {
+                e.quick_action([Structs.text(err.message || '设置失败')]);
             }
-            e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '设置最大码长') {
             const userId = String(e.sender.user_id);
-            const changed = await withUserMutation(userId, async () => {
-                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                if (que.length <= 0) return false;
-                return withSchemeMutations([que[0].name], async () => {
-                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    if (que.length <= 0) return false;
-                    await updateSchemeConfigAtomically(que[0].name, config => {
-                        config.maxlen = strs.length < 2 ? 4 : Number(strs[1]);
-                        if (isNaN(config.maxlen)) config.maxlen = 4;
+            try {
+                const changedName = await withUserMutation(userId, async () => {
+                    const rows = await getOwnedPrivateSchemes(userId);
+                    const args = strs.slice(1);
+                    const selection = resolveUserConfigSelection(rows, args, '设置最大码长 <方案名> <整数|默认>');
+                    const { name } = selection;
+                    const value = normalizeAdminConfigValue('最大码长', selection.value || '默认');
+                    return withSchemeMutations([name], async () => {
+                        const current = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(userId)} and name = ${mysql.escape(name)}`);
+                        if (current.length !== 1) throw new AdminCommandError('方案登记在等待操作期间发生变化，请重试。');
+                        await updateSchemeConfigAtomically(name, config => {
+                            config.maxlen = value;
+                        });
+                        return name;
                     });
-                    return true;
                 });
-            });
-            if (!changed) {
-                e.quick_action([Structs.text("请先上传词提")]);
-                return;
+                e.quick_action([Structs.text(`方案“${changedName}”设置完毕`)]);
+            } catch (err) {
+                e.quick_action([Structs.text(err.message || '设置失败')]);
             }
-            e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '设置标点引导键') {
             const userId = String(e.sender.user_id);
-            const changed = await withUserMutation(userId, async () => {
-                let que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                if (que.length <= 0) return false;
-                return withSchemeMutations([que[0].name], async () => {
-                    que = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    if (que.length <= 0) return false;
-                    await updateSchemeConfigAtomically(que[0].name, config => {
-                        config.punct = strs.length < 2 ? '' : strs[1];
+            try {
+                const changedName = await withUserMutation(userId, async () => {
+                    const rows = await getOwnedPrivateSchemes(userId);
+                    const args = strs.slice(1);
+                    const selection = resolveUserConfigSelection(rows, args, '设置标点引导键 <方案名> <值|无|默认>');
+                    const { name } = selection;
+                    const value = normalizeAdminConfigValue('标点引导键', selection.value || '无');
+                    return withSchemeMutations([name], async () => {
+                        const current = await run_mysql(`select name from private_word_base where qqid = ${mysql.escape(userId)} and name = ${mysql.escape(name)}`);
+                        if (current.length !== 1) throw new AdminCommandError('方案登记在等待操作期间发生变化，请重试。');
+                        await updateSchemeConfigAtomically(name, config => {
+                            config.punct = value;
+                        });
+                        return name;
                     });
-                    return true;
                 });
-            });
-            if (!changed) {
-                e.quick_action([Structs.text("请先上传词提")]);
-                return;
+                e.quick_action([Structs.text(`方案“${changedName}”设置完毕`)]);
+            } catch (err) {
+                e.quick_action([Structs.text(err.message || '设置失败')]);
             }
-            e.quick_action([Structs.text('设置完毕')]);
         }
         else if (strs[0] === '上传词提') {
             const replyUpload = text => sendQuotedText(e, text, '词提上传状态消息');
-            if (strs.length < 2) {
-                await replyUpload('上传请求未受理：缺少方案名称。\n正确格式：上传词提 方案名称');
+            if (strs.length !== 2) {
+                await replyUpload('上传请求未受理：指令格式不正确。\n正确格式：上传词提 方案名称');
                 return;
             }
             let name = strs[1];
@@ -2062,7 +2133,7 @@ bot.on("message.private", async e => {
                     ? `\n你此前的上传“${uploadTask.previousName}”已进入最终登记阶段，无法安全中断；本任务会排在其后并覆盖它。`
                     : '';
             await replyUpload(
-                `上传中...（1/4：下载文件）\n方案：${name}\n文件：${sourceFileName}\n大小：${formatFileSize(sourceFileSize)}${previousTaskText}\n正在下载文件。同一用户的新上传会取消此前尚未进入最终登记阶段的上传。`
+                `上传中...（1/4：下载文件）\n方案：${name}\n文件：${sourceFileName}\n大小：${formatFileSize(sourceFileSize)}${previousTaskText}\n正在下载文件。同名新上传会取消此前尚未进入最终登记阶段的同名任务；不同名任务会分别排队。`
             );
             let version = null;
             let committed = false;
@@ -2098,18 +2169,14 @@ bot.on("message.private", async e => {
 
                 await withUserMutation(userId, async () => {
                     throwIfUploadSuperseded(uploadTask);
-                    const ownedRows = await run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`);
-                    const oldName = ownedRows.length > 0 ? ownedRows[0].name : null;
-
-                    await withSchemeMutations([name, oldName].filter(Boolean), async () => {
+                    await withSchemeMutations([name], async () => {
                         throwIfUploadSuperseded(uploadTask);
                         uploadTask.phase = '检查方案名称和归属';
                         // Only checks made while holding both locks authorize
                         // publication. This closes the old check/use race.
-                        const [publicRows, otherPrivateRows, currentOwnedRows] = await Promise.all([
+                        const [publicRows, privateRows] = await Promise.all([
                             run_mysql(`select * from public_word_base where name = ${mysql.escape(name)}`),
-                            run_mysql(`select * from private_word_base where name = ${mysql.escape(name)} and qqid != ${mysql.escape(userId)}`),
-                            run_mysql(`select * from private_word_base where qqid = ${mysql.escape(userId)}`)
+                            run_mysql(`select * from private_word_base where name = ${mysql.escape(name)}`)
                         ]);
                         throwIfUploadSuperseded(uploadTask);
                         if (publicRows.length > 0) {
@@ -2117,15 +2184,13 @@ bot.on("message.private", async e => {
                             err.userMessage = '该名字已在公共码表中被使用';
                             throw err;
                         }
-                        if (otherPrivateRows.length > 0) {
+                        if (privateRows.length > 1 || (privateRows.length === 1 && String(privateRows[0].qqid) !== userId)) {
                             const err = new Error('private scheme name is occupied');
                             err.userMessage = '该名字已被别人使用';
                             throw err;
                         }
-                        const currentOldName = currentOwnedRows.length > 0 ? currentOwnedRows[0].name : null;
-                        if (currentOldName !== oldName) throw new Error('private scheme changed while upload was waiting');
-
-                        const config = oldName === null ? null : word_hint.get_ext(schemePath(oldName));
+                        const updating = privateRows.length === 1;
+                        const config = updating ? word_hint.get_ext(schemePath(name)) : null;
                         uploadTask.phase = '等待构建队列';
                         await buildHintAsync(path.resolve(version.base), {
                             signal: uploadTask.controller.signal,
@@ -2160,9 +2225,7 @@ bot.on("message.private", async e => {
                             // atomic publication tail, then let the new upload
                             // overwrite it under the same user lock.
                             uploadTask.cancelable = false;
-                            if (oldName !== null) {
-                                await run_mysql(`update private_word_base set name = ${mysql.escape(name)} where qqid = ${mysql.escape(userId)}`);
-                            } else {
+                            if (!updating) {
                                 await run_mysql(`insert into private_word_base (qqid, name) values (${mysql.escape(userId)}, ${mysql.escape(name)})`);
                             }
                         } catch (err) {
@@ -2171,26 +2234,18 @@ bot.on("message.private", async e => {
                         }
 
                         committed = true;
-                        uploadResult = { oldName, hintSize: builtHintSize };
+                        uploadResult = { updating, hintSize: builtHintSize };
                         uploadTask.phase = '清理旧版本';
                         try {
                             publication.cleanupPrevious();
-                            if (oldName !== null && oldName !== name) {
-                                const oldBase = schemePath(oldName);
-                                word_hint.remove(oldBase);
-                                await removeRegularWorkerScheme(oldBase);
-                                removeSchemeStorage(oldName);
-                            }
                         } catch (cleanupError) {
                             console.warn('旧词提版本清理失败:', cleanupError.message || cleanupError);
                         }
                     });
                 });
-                const resultText = uploadResult.oldName === null
-                    ? '已创建新的私人词提方案。'
-                    : uploadResult.oldName === name
-                        ? '已用本次文件更新同名方案。'
-                        : `已将原方案“${uploadResult.oldName}”替换为“${name}”，原方案文件已清理。`;
+                const resultText = uploadResult.updating
+                    ? '已用本次文件更新同名方案，其他私人方案不受影响。'
+                    : '已新增私人词提方案，其他私人方案不受影响。';
                 await replyUpload(
                     `上传完成\n方案：${name}\n源文件：${sourceFileName}（${formatFileSize(sourceFileSize)}）\nHint：${formatFileSize(uploadResult.hintSize)}\n用时：${((Date.now() - uploadStartedAt) / 1000).toFixed(1)} 秒\n结果：${resultText}\n新方案已经可以查询。`
                 );

@@ -107,9 +107,22 @@ export const withSchemeMutations = (names, operation) =>
 let nextUploadId = 1;
 const latestUserUploads = new Map();
 
+function getUserUploads(qqid, create = false) {
+  const key = String(qqid);
+  let uploads = latestUserUploads.get(key);
+  if (!uploads && create) {
+    uploads = new Map();
+    latestUserUploads.set(key, uploads);
+  }
+  return uploads || null;
+}
+
 export function beginLatestUserUpload(qqid, name) {
   const key = String(qqid);
-  const previous = latestUserUploads.get(key) || null;
+  const uploads = getUserUploads(key, true);
+  const previous = [...uploads.values()]
+    .filter(task => task.name === name)
+    .sort((left, right) => right.id - left.id)[0] || null;
   let previousState = 'none';
   if (previous) {
     if (previous.cancelable) {
@@ -132,16 +145,21 @@ export function beginLatestUserUpload(qqid, name) {
     previousName: previous?.name || null,
     previousState
   };
-  latestUserUploads.set(key, task);
+  uploads.set(task.id, task);
   return task;
 }
 
 export function finishLatestUserUpload(task) {
-  if (latestUserUploads.get(task.qqid)?.id === task.id) latestUserUploads.delete(task.qqid);
+  const uploads = getUserUploads(task.qqid);
+  uploads?.delete(task.id);
+  if (uploads?.size === 0) latestUserUploads.delete(task.qqid);
 }
 
-export function cancelLatestUserUpload(qqid) {
-  const task = latestUserUploads.get(String(qqid));
+export function cancelLatestUserUpload(qqid, name = null) {
+  const uploads = getUserUploads(qqid);
+  const task = [...(uploads?.values() || [])]
+    .filter(item => name === null || item.name === name)
+    .sort((left, right) => right.id - left.id)[0];
   if (!task) return { state: 'none' };
   if (task.controller.signal.aborted) {
     return { state: 'cancelling', name: task.name, phase: task.phase };

@@ -53,6 +53,16 @@ test('replacement must be an explicit final argument', () => {
     );
 });
 
+test('parses optional scheme name for administrator upload cancellation', () => {
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 取消上传'), {
+        action: 'cancel-upload', name: null
+    });
+    assert.deepEqual(parseWordHintAdminCommand('码表管理 取消上传 五笔'), {
+        action: 'cancel-upload', name: '五笔'
+    });
+    assert.throws(() => parseWordHintAdminCommand('码表管理 取消上传 五笔 多余'), /正确格式/);
+});
+
 test('parses list, inspection, configuration, and deletion commands', () => {
     assert.deepEqual(parseWordHintAdminCommand('码表管理 列表'), { action: 'list', kind: '全部', keyword: '' });
     assert.deepEqual(parseWordHintAdminCommand('码表管理 列表 私人 五笔'), { action: 'list', kind: '私人', keyword: '五笔' });
@@ -94,16 +104,16 @@ test('enforces the public upload collision matrix', () => {
 test('enforces the private upload collision matrix', () => {
     const create = { kind: 'private', qqid: '123456789', replace: false };
     const replace = { kind: 'private', qqid: '123456789', replace: true };
-    assert.doesNotThrow(() => assertAdminUploadTarget(create, null, null));
-    assert.throws(() => assertAdminUploadTarget(create, null, '旧方案'), /已有私人方案/);
-    assert.throws(() => assertAdminUploadTarget(create, { kind: 'public' }, null), /已被占用/);
-    assert.doesNotThrow(() => assertAdminUploadTarget(replace, { kind: 'private', qqid: '123456789' }, '旧方案'));
-    assert.doesNotThrow(() => assertAdminUploadTarget(replace, null, '旧方案'));
-    assert.throws(() => assertAdminUploadTarget(replace, null, null), /没有可替换/);
+    assert.doesNotThrow(() => assertAdminUploadTarget(create, null));
+    assert.throws(() => assertAdminUploadTarget(create, { kind: 'public' }), /已被占用/);
+    assert.throws(() => assertAdminUploadTarget(create, { kind: 'private', qqid: '123456789' }), /已被占用/);
+    assert.doesNotThrow(() => assertAdminUploadTarget(replace, { kind: 'private', qqid: '123456789' }));
+    assert.throws(() => assertAdminUploadTarget(replace, null), /没有可替换/);
     assert.throws(
-        () => assertAdminUploadTarget(replace, { kind: 'private', qqid: '987654321' }, '旧方案'),
-        /其他用户占用/
+        () => assertAdminUploadTarget(replace, { kind: 'private', qqid: '987654321' }),
+        /其他用户/
     );
+    assert.throws(() => assertAdminUploadTarget(replace, { kind: 'public' }), /公共方案/);
 });
 
 test('delete confirmations are bound, one-shot, and expire', () => {

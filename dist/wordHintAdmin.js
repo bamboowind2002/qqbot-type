@@ -60,8 +60,8 @@ export function parseWordHintAdminCommand(text) {
         return { action: 'confirm-delete', token: parts[2] };
     }
     if (action === '取消上传') {
-        if (parts.length !== 2) throw new AdminCommandError('正确格式：码表管理 取消上传');
-        return { action: 'cancel-upload' };
+        if (parts.length !== 2 && parts.length !== 3) throw new AdminCommandError('正确格式：码表管理 取消上传 [方案名]');
+        return { action: 'cancel-upload', name: parts[2] || null };
     }
     if (action === '上传') {
         const kind = parts[2];
@@ -113,7 +113,7 @@ export function normalizeAdminConfigValue(field, value) {
     throw new AdminCommandError('不支持的配置字段。');
 }
 
-export function assertAdminUploadTarget(command, namedScheme, ownerOldName = null) {
+export function assertAdminUploadTarget(command, namedScheme) {
     if (command.kind === 'public') {
         if (!command.replace && namedScheme !== null) {
             throw new AdminCommandError('方案名已被占用；如需覆盖同名公共方案，请在命令末尾添加“替换”。');
@@ -124,17 +124,14 @@ export function assertAdminUploadTarget(command, namedScheme, ownerOldName = nul
         return;
     }
     if (!command.replace) {
-        if (ownerOldName !== null) {
-            throw new AdminCommandError(`目标 QQ 已有私人方案“${ownerOldName}”；如需替换，请在命令末尾添加“替换”。`);
-        }
         if (namedScheme !== null) throw new AdminCommandError('方案名已被占用。');
         return;
     }
-    if (ownerOldName === null) {
-        throw new AdminCommandError('目标 QQ 没有可替换的私人方案；请去掉命令末尾的“替换”以新建。');
+    if (namedScheme === null) {
+        throw new AdminCommandError('目标 QQ 没有可替换的同名私人方案；请去掉命令末尾的“替换”以新建。');
     }
-    if (namedScheme !== null && !(namedScheme.kind === 'private' && namedScheme.qqid === command.qqid)) {
-        throw new AdminCommandError('新方案名已被公共方案或其他用户占用。');
+    if (!(namedScheme.kind === 'private' && namedScheme.qqid === command.qqid)) {
+        throw new AdminCommandError('该方案名属于公共方案或其他用户，不能替换。');
     }
 }
 
@@ -168,11 +165,11 @@ export const WORD_HINT_ADMIN_HELP = `管理员码表命令
 码表管理 查QQ <QQ号>
 码表管理 上传 公共 <方案名> [替换]
 码表管理 上传 私人 <QQ号> <方案名> [替换]
-码表管理 取消上传
+码表管理 取消上传 [方案名]
 码表管理 设置 <方案名> 选重键 <值|默认>
 码表管理 设置 <方案名> 最大码长 <整数|默认>
 码表管理 设置 <方案名> 标点引导键 <值|无|默认>
 码表管理 删除 <方案名>
 码表管理 确认删除 <确认码>
 
-上传时请引用私聊中的 .txt 文件。不带“替换”只允许新建；覆盖或替换现有私人方案时，必须把“替换”写在命令末尾。`;
+上传时请引用私聊中的 .txt 文件。不带“替换”只允许新建；“替换”只覆盖同类型、同归属的同名方案。一个 QQ 可以拥有多个私人方案。`;
