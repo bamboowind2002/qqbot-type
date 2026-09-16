@@ -122,7 +122,7 @@
 }
 
 .word_hint_heatmap {
-    margin: 8px 0 12px;
+    margin: 8px auto 12px;
     width: min(100%, 720px);
     font-family: var(--code_font);
     font-variant-ligatures: none;
@@ -138,8 +138,8 @@
     position: relative;
     box-sizing: border-box;
     min-width: 0;
-    height: 27px;
-    padding: 5px 2px;
+    height: 32px;
+    padding: 3px 2px 10px;
     border: 1px solid #d9dce1;
     border-radius: 3px;
     overflow: hidden;
@@ -160,9 +160,13 @@
     position: absolute;
     right: 3px;
     bottom: 1px;
+    max-width: calc(100% - 6px);
+    overflow: hidden;
     color: inherit;
-    font-size: 6.5pt;
+    font-size: 5.5pt;
     line-height: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .is_chong {

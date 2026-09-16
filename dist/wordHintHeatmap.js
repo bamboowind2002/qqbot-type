@@ -19,10 +19,9 @@ const KEYBOARD_ROWS = [
         { key: 'Enter', label: 'Enter', width: 2.25 }
     ],
     [
-        { key: 'ShiftLeft', label: '↑', title: 'Shift', width: 2.25 },
+        { key: 'ShiftLeft', label: 'Shift', title: '左 Shift', width: 2.25 },
         ...'zxcvbnm'.split('').map(key => ({ key, label: key })),
-        { key: ',', label: ',' }, { key: '.', label: '.' }, { key: '/', label: '/' },
-        { key: 'ShiftRight', label: '↑', title: 'Shift', width: 2.75 }
+        { key: ',', label: ',' }, { key: '.', label: '.' }, { key: '/', label: '/' }
     ],
     [
         { key: 'Space', label: 'Space', width: 6 }
@@ -30,20 +29,44 @@ const KEYBOARD_ROWS = [
 ];
 
 const KEY_SET = new Set(KEYBOARD_ROWS.flat().map(key => key.key));
-const SHIFTED_KEY_MAP = {
-    '!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6',
-    '&': '7', '*': '8', '(': '9', ')': '0', '+': '=',
-    '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'",
-    '<': ',', '>': '.', '~': '`'
-};
-
+const HEATMAP_STOPS = [
+    [222, 235, 247],  // light blue
+    [158, 202, 225],  // blue gray
+    [66, 146, 198],   // medium blue
+    [8, 81, 156]      // dark blue
+];
 function normalizeKey(character) {
-    if (character === ' ' || character === '_') return 'Space';
+    if (character === '↑') return { key: 'ShiftLeft', shifted: false };
+    if (character === ' ' || character === '_') return { key: 'Space', shifted: false };
     if (character === '?') return null;
-    if (/^[A-Z]$/.test(character)) return character.toLowerCase();
-    if (/^[a-z]$/.test(character)) return character;
-    if (SHIFTED_KEY_MAP[character]) return SHIFTED_KEY_MAP[character];
-    return KEY_SET.has(character) ? character : null;
+    if (/^[A-Z]$/.test(character)) return { key: character.toLowerCase(), shifted: false };
+    if (/^[a-z]$/.test(character)) return { key: character, shifted: false };
+    return KEY_SET.has(character) ? { key: character, shifted: false } : null;
+}
+
+function rgbToHex(rgb) {
+    return `#${rgb.map(value => value.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export function getWordHintHeatmapStyle(count, max) {
+    if (count <= 0 || max <= 0) {
+        return { backgroundColor: '#f2f3f5', color: '#202124' };
+    }
+
+    const position = Math.min(1, count / max) * (HEATMAP_STOPS.length - 1);
+    const index = Math.min(HEATMAP_STOPS.length - 2, Math.floor(position));
+    const fraction = position - index;
+    const rgb = HEATMAP_STOPS[index].map((value, channel) =>
+        Math.round(value + (HEATMAP_STOPS[index + 1][channel] - value) * fraction)
+    );
+    const [r, g, b] = rgb.map(value => value / 255).map(value =>
+        value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    );
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return {
+        backgroundColor: rgbToHex(rgb),
+        color: luminance < 0.55 ? '#ffffff' : '#202124'
+    };
 }
 
 export function buildWordHintHeatmap(showList = []) {
@@ -52,9 +75,9 @@ export function buildWordHintHeatmap(showList = []) {
 
     for (const item of showList) {
         for (const character of String(item?.code ?? '')) {
-            const key = normalizeKey(character);
-            if (key === null) continue;
-            counts[key]++;
+            const result = normalizeKey(character);
+            if (result === null) continue;
+            counts[result.key]++;
             total++;
         }
     }
@@ -64,6 +87,7 @@ export function buildWordHintHeatmap(showList = []) {
         rows: KEYBOARD_ROWS,
         counts,
         max,
-        total
+        total,
+        styles: Object.fromEntries(Object.keys(counts).map(key => [key, getWordHintHeatmapStyle(counts[key], max)]))
     };
 }

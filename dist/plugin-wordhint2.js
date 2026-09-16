@@ -371,16 +371,13 @@ async function word_hint_get_picture(name, from, content, kwargs = {}) {
                             const labelNode = document.createElement('span');
                             const countNode = document.createElement('span');
                             const count = heatmap.counts[key.key] || 0;
-                            const intensity = heatmap.max === 0 ? 0 : count / heatmap.max;
-                            const lightness = Math.round(96 - intensity * 56);
+                            const style = heatmap.styles[key.key];
                             keyNode.className = 'heatmap_key';
                             labelNode.className = 'heatmap_key_label';
                             countNode.className = 'heatmap_key_count';
                             keyNode.style.flex = `${key.width || 1} 1 0`;
-                            keyNode.style.backgroundColor = count === 0
-                                ? '#f2f3f5'
-                                : `hsl(210, 85%, ${lightness}%)`;
-                            keyNode.style.color = count > 0 && lightness < 62 ? '#ffffff' : '#202124';
+                            keyNode.style.backgroundColor = style.backgroundColor;
+                            keyNode.style.color = style.color;
                             labelNode.textContent = key.label;
                             if (count) countNode.textContent = count;
                             keyNode.title = `${key.title || key.label}: ${count} 次`;

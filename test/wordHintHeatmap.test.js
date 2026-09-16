@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildWordHintHeatmap } from '../dist/wordHintHeatmap.js';
+import { buildWordHintHeatmap, getWordHintHeatmapStyle } from '../dist/wordHintHeatmap.js';
 
 test('heatmap counts actual printable main-keyboard keys case-insensitively', () => {
     const result = buildWordHintHeatmap([
@@ -38,9 +38,29 @@ test('heatmap returns a zeroed keyboard for empty results', () => {
     assert.ok(Object.values(result.counts).every(count => count === 0));
 });
 
-test('heatmap uses an up arrow for both Shift keys', () => {
-    const shiftKeys = buildWordHintHeatmap().rows.flat().filter(key => key.title === 'Shift');
+test('heatmap displays one left Shift key', () => {
+    const shiftKeys = buildWordHintHeatmap().rows.flat().filter(key => key.key === 'ShiftLeft');
 
-    assert.equal(shiftKeys.length, 2);
-    assert.ok(shiftKeys.every(key => key.label === '↑'));
+    assert.equal(shiftKeys.length, 1);
+    assert.equal(shiftKeys[0].label, 'Shift');
+});
+
+test('heatmap counts only C++ up-arrow output as left Shift', () => {
+    const result = buildWordHintHeatmap([{ code: 'A+_ ↑ ' }]);
+
+    assert.equal(result.counts.a, 1);
+    assert.equal(result.counts['+'], undefined);
+    assert.equal(result.counts.Space, 3);
+    assert.equal(result.counts.ShiftLeft, 1);
+    assert.equal(result.counts.ShiftRight, undefined);
+});
+
+test('heatmap colors use a linear blue gradient with contrast-aware text', () => {
+    assert.deepEqual(getWordHintHeatmapStyle(0, 10), {
+        backgroundColor: '#f2f3f5', color: '#202124'
+    });
+    assert.deepEqual(getWordHintHeatmapStyle(1, 1), {
+        backgroundColor: '#08519c', color: '#ffffff'
+    });
+    assert.notEqual(getWordHintHeatmapStyle(2, 10).backgroundColor, getWordHintHeatmapStyle(8, 10).backgroundColor);
 });
