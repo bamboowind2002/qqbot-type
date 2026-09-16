@@ -64,3 +64,19 @@ test('heatmap colors use a linear blue gradient with contrast-aware text', () =>
     });
     assert.notEqual(getWordHintHeatmapStyle(2, 10).backgroundColor, getWordHintHeatmapStyle(8, 10).backgroundColor);
 });
+
+test('heatmap square-root mapping keeps a low-frequency key distinct from zero', () => {
+    const low = getWordHintHeatmapStyle(1, 144);
+    const zero = getWordHintHeatmapStyle(0, 144);
+    const high = getWordHintHeatmapStyle(144, 144);
+
+    assert.notEqual(low.backgroundColor, zero.backgroundColor);
+    assert.notEqual(low.backgroundColor, high.backgroundColor);
+});
+
+test('heatmap switches to white text above the middle of the visual scale', () => {
+    assert.equal(getWordHintHeatmapStyle(2, 10).color, '#202124');
+    assert.equal(getWordHintHeatmapStyle(1, 4).color, '#202124');
+    assert.equal(getWordHintHeatmapStyle(1, 3).color, '#ffffff');
+    assert.equal(getWordHintHeatmapStyle(8, 10).color, '#ffffff');
+});

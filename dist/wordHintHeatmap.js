@@ -53,20 +53,17 @@ export function getWordHintHeatmapStyle(count, max) {
         return { backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124' };
     }
 
-    const position = Math.min(1, count / max) * (HEATMAP_STOPS.length - 1);
+    const intensity = Math.sqrt(Math.min(1, count / max));
+    const position = intensity * (HEATMAP_STOPS.length - 1);
     const index = Math.min(HEATMAP_STOPS.length - 2, Math.floor(position));
     const fraction = position - index;
     const rgb = HEATMAP_STOPS[index].map((value, channel) =>
         Math.round(value + (HEATMAP_STOPS[index + 1][channel] - value) * fraction)
     );
-    const [r, g, b] = rgb.map(value => value / 255).map(value =>
-        value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
-    );
-    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     return {
         backgroundColor: rgbToHex(rgb),
         borderColor: rgbToHex(rgb.map(value => Math.max(0, Math.round(value * 0.72)))),
-        color: luminance < 0.55 ? '#ffffff' : '#202124'
+        color: intensity >= 0.55 ? '#ffffff' : '#202124'
     };
 }
 
