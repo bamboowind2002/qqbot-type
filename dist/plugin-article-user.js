@@ -5,11 +5,10 @@ import { getArticleSettings, selectArticle, setSegmentLength, getProgress, setPr
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
-import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
+import { DIFFICULTY_RANGES, isDifficultyMatch, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
 import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
-import { isDifficultyMatch } from './articleDifficulty.js';
 import crypto from 'node:crypto';
 import { listArticles } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
@@ -81,38 +80,64 @@ async function articleMode(e, mode, args) {
   return send(e, output);
 }
 
+async function findDifficultySegment(titles, length, difficulty, mapRecords, excluded) {
+  const range = DIFFICULTY_RANGES[normalizeDifficulty(difficulty)];
+  const titleSet = new Set(titles), bodyCache = new Map();
+  const distance = score => score >= range[0] && score < range[1] ? 0 : score < range[0] ? range[0] - score : score - range[1];
+  const evaluate = async (title, start) => {
+    if (!titleSet.has(title) || excluded.has(`${title}:${start}`)) return null;
+    const body = bodyCache.has(title) ? bodyCache.get(title) : await readArticle(title).then(text => (bodyCache.set(title, text), text));
+    const chars = [...body], actualStart = Math.max(0, Math.min(chars.length - length, start));
+    if (actualStart < 0 || actualStart + length > chars.length || excluded.has(`${title}:${actualStart}`)) return null;
+    const text = chars.slice(actualStart, actualStart + length).join(''), [score, , rank, error] = get_rank(text);
+    return error ? null : { title, text, body, start: actualStart, score, rank };
+  };
+  const sources = [
+    ...candidateCacheGet(length, difficulty),
+    ...mapRecords.filter(record => titleSet.has(record.title) && Number.isInteger(record.start)).sort((a, b) => distance(a.score) - distance(b.score)).slice(0, 1000)
+  ].filter((source, index, all) => all.findIndex(item => item.title === source.title && item.start === source.start) === index)
+    .sort(() => Math.random() - 0.5);
+  let best = null;
+  for (const source of sources) {
+    const candidate = await evaluate(source.title, source.start);
+    if (!candidate) continue;
+    if (!best || distance(candidate.score) < distance(best.score)) best = candidate;
+    if (isDifficultyMatch(candidate.score, difficulty)) return candidate;
+  }
+  const deadline = Date.now() + 5000;
+  for (let attempt = 0; attempt < 300 && Date.now() <= deadline; attempt++) {
+    const title = titles[Math.floor(Math.random() * titles.length)];
+    const body = bodyCache.has(title) ? bodyCache.get(title) : await readArticle(title).then(text => (bodyCache.set(title, text), text));
+    const chars = [...body];
+    if (chars.length < length) continue;
+    const start = Math.floor(Math.random() * (chars.length - length + 1));
+    const candidate = await evaluate(title, start);
+    if (!candidate) continue;
+    if (!best || distance(candidate.score) < distance(best.score)) best = candidate;
+    if (isDifficultyMatch(candidate.score, difficulty)) return candidate;
+  }
+  return best;
+}
+
 async function difficultyMode(e, difficulty, args) {
   const settings = await getArticleSettings(consql, userId(e));
   const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
-  const articles = [];
-  for (const title of listArticles()) articles.push({ title, text: await readArticle(title) });
-  const map = await readDifficultyMap();
+  const titles = listArticles(), map = await readDifficultyMap();
   const previous = getArticleSession(sessionKey(e));
-  const sameMode = previous?.mode === 'difficulty' && previous.length === parsed.length && previous.difficulty === normalizeDifficulty(difficulty);
+  const normalized = normalizeDifficulty(difficulty);
+  const sameMode = previous?.mode === 'difficulty' && previous.length === parsed.length && previous.difficulty === normalized;
   const recent = sameMode ? (previous.recentSegments || []) : [];
-  const excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
-  let result = null;
-  const byTitle = new Map(articles.map(article => [article.title, article]));
-  const cachedCandidates = candidateCacheGet(parsed.length, difficulty).filter(cached => !excluded.has(`${cached.title}:${cached.start}`));
-  for (const cached of cachedCandidates.sort(() => Math.random() - 0.5)) {
-    const article = byTitle.get(cached.title);
-    if (!article) continue;
-    const chars = [...article.text];
-    if (cached.start < 0 || cached.start + parsed.length > chars.length) continue;
-    const text = chars.slice(cached.start, cached.start + parsed.length).join('');
-    const [score, , rank, error] = get_rank(text);
-    if (!error && isDifficultyMatch(score, difficulty)) { result = { title: cached.title, text, start: cached.start, score, rank }; break; }
-  }
-  if (!result) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || [], excluded);
-  if (!result && excluded.size) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
+  let excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
+  let result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded);
+  if (!result && excluded.size) { excluded = new Set(); result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded); }
   if (!result) throw new Error('没有找到可用段落。');
-  const revision = crypto.createHash('sha256').update(byTitle.get(result.title).text).digest('hex');
+  const revision = crypto.createHash('sha256').update(result.body).digest('hex');
   candidateCachePut({ length: parsed.length, difficulty, title: result.title, revision, start: result.start, score: result.score });
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   const recentSegments = [...recent, { title: result.title, start: result.start }].slice(-20);
-  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalizeDifficulty(difficulty), length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text, recentSegments });
+  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalized, length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text, recentSegments });
   return send(e, output);
 }
 
