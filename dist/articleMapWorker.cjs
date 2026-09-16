@@ -9,10 +9,10 @@ process.on('message', async message => {
     if (message?.type !== 'sync') return;
     map = await import('./articleMap.js');
     const result = await map.syncDifficultyMap(progress => process.send?.({ type: 'progress', progress }));
-    process.send?.({ type: 'result', result });
+    process.send?.({ type: 'result', result }, () => process.disconnect?.());
   } catch (error) {
-    process.send?.({ type: 'error', error: error.stack || String(error) });
+    process.send?.({ type: 'error', error: error.stack || String(error) }, () => process.disconnect?.());
   } finally {
-    process.disconnect?.();
+    // Disconnect only after the IPC callback above flushes the result.
   }
 });
