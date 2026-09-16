@@ -1,5 +1,6 @@
 import "./plugin-help.js"
 import "./plugin-wordhint2.js"
+import "./plugin-article.js"
 // import './plugin-thumbs_up2.js'
 import './plugin-request.js'
 import './plugin-1A2B.js'
