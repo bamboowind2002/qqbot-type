@@ -29,12 +29,10 @@ const KEYBOARD_ROWS = [
 ];
 
 const KEY_SET = new Set(KEYBOARD_ROWS.flat().map(key => key.key));
-// Google's complete Turbo colormap polynomial approximation. Keep the full
-// [0, 1] range so the low end starts at purple and the high end finishes red.
-const TURBO_COEFFICIENTS = [
-    [0.13572138, 4.61539260, -42.66032258, 132.13108234, -152.94239396, 59.28637943],
-    [0.09140261, 2.19418839, 4.84296658, -14.18503333, 4.27729857, 2.82956604],
-    [0.10667330, 12.64194608, -60.58204836, 110.36276771, -89.90310912, 27.34824973]
+const VIRIDIS_STOPS = [
+    [68, 1, 84], [72, 36, 117], [65, 68, 135], [53, 95, 141],
+    [42, 120, 142], [33, 145, 140], [34, 168, 132], [68, 191, 112],
+    [122, 209, 81], [189, 223, 38], [253, 231, 37]
 ];
 function normalizeKey(character) {
     if (character === '↑') return { key: 'ShiftLeft', shifted: false };
@@ -51,11 +49,12 @@ function rgbToHex(rgb) {
 
 function heatmapColor(intensity) {
     const t = Math.max(0, Math.min(1, intensity));
-    const powers = [1, t, t ** 2, t ** 3, t ** 4, t ** 5];
-    return TURBO_COEFFICIENTS.map(coefficients => Math.max(0, Math.min(255, Math.round(
-        coefficients.reduce((sum, coefficient, index) =>
-            sum + coefficient * powers[index], 0) * 255
-    ))));
+    const position = t * (VIRIDIS_STOPS.length - 1);
+    const index = Math.min(VIRIDIS_STOPS.length - 2, Math.floor(position));
+    const fraction = position - index;
+    return VIRIDIS_STOPS[index].map((value, channel) => Math.round(
+        value + (VIRIDIS_STOPS[index + 1][channel] - value) * fraction
+    ));
 }
 
 function foregroundFor(rgb) {
@@ -68,7 +67,7 @@ export function getWordHintHeatmapStyle(count, max) {
         return { backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124' };
     }
 
-    const intensity = Math.min(1, count / max);
+    const intensity = Math.log1p(count) / Math.log1p(max);
     const rgb = heatmapColor(intensity);
     return {
         backgroundColor: rgbToHex(rgb),
