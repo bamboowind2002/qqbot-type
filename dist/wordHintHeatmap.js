@@ -68,7 +68,7 @@ export function getWordHintHeatmapStyle(count, max) {
         return { backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124' };
     }
 
-    const intensity = max === 1 ? 1 : Math.log(count) / Math.log(max);
+    const intensity = Math.min(1, count / max);
     const rgb = heatmapColor(intensity);
     return {
         backgroundColor: rgbToHex(rgb),

@@ -64,22 +64,24 @@ test('heatmap colors follow the complete continuous Turbo curve', () => {
     assert.equal(new Set(colors).size, colors.length);
 });
 
-test('heatmap logarithmic mapping starts the lowest positive frequency at Turbo purple', () => {
+test('heatmap maps frequency linearly onto the complete Turbo curve', () => {
     const low = getWordHintHeatmapStyle(1, 144);
     const zero = getWordHintHeatmapStyle(0, 144);
+    const middle = getWordHintHeatmapStyle(72, 144);
     const high = getWordHintHeatmapStyle(144, 144);
 
     const lowRgb = low.backgroundColor.match(/[\da-f]{2}/gi).map(value => Number.parseInt(value, 16));
     assert.ok(lowRgb[0] > lowRgb[1]);
     assert.ok(lowRgb[2] > lowRgb[1]);
     assert.notEqual(low.backgroundColor, zero.backgroundColor);
+    assert.equal(middle.backgroundColor, getWordHintHeatmapStyle(1, 2).backgroundColor);
     assert.notEqual(low.backgroundColor, high.backgroundColor);
 });
 
 test('heatmap chooses text color from the actual background brightness', () => {
-    assert.equal(getWordHintHeatmapStyle(2, 10).color, '#202124');
+    assert.equal(getWordHintHeatmapStyle(2, 10).color, '#ffffff');
     assert.equal(getWordHintHeatmapStyle(1, 4).color, '#ffffff');
-    assert.equal(getWordHintHeatmapStyle(1, 3).color, '#ffffff');
+    assert.equal(getWordHintHeatmapStyle(1, 3).color, '#202124');
     assert.equal(getWordHintHeatmapStyle(3, 6).color, '#202124');
     assert.equal(getWordHintHeatmapStyle(8, 10).color, '#ffffff');
 });
