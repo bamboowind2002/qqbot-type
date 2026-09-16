@@ -123,15 +123,37 @@
 
 .word_hint_heatmap {
     margin: 8px auto 12px;
-    width: min(100%, 720px);
+    width: min(100%, 540px);
     font-family: var(--code_font);
     font-variant-ligatures: none;
 }
 
 .heatmap_row {
+    box-sizing: border-box;
     display: flex;
     gap: 3px;
     margin-bottom: 3px;
+}
+
+/* Match the usual staggered ANSI keyboard rows without changing the key set. */
+.heatmap_row:nth-child(2) {
+    padding-left: 2.5%;
+}
+
+.heatmap_row:nth-child(3) {
+    padding-left: 5%;
+}
+
+.heatmap_row:nth-child(4) {
+    padding-left: 7.5%;
+}
+
+.heatmap_row:last-child {
+    justify-content: center;
+}
+
+.heatmap_row:last-child .heatmap_key {
+    flex: 0 0 43% !important;
 }
 
 .heatmap_key {
