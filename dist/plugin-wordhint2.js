@@ -20,6 +20,7 @@ import { AdminCommandError, AdminDeleteConfirmationStore, assertAdminUploadTarge
 import { assertUserUploadCapacity, resolveOwnedScheme, resolveUserConfigSelection } from './wordHintUser.js';
 import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
+import { buildWordHintHeatmap } from './wordHintHeatmap.js';
 const require = createRequire(import.meta.url);
 const word_hint = require('../build/Release/word_hint.node');
 
@@ -315,6 +316,7 @@ async function word_hint_get_search_picture(name, from, content, kwargs = {}) {
 
 
 async function word_hint_get_picture(name, from, content, kwargs = {}) {
+    const heatmap = buildWordHintHeatmap(content?.show_list);
     let blocks = [];
     for (let i = 0; i < content.show_list.length; i += 600) {
         blocks.push(content.show_list.slice(i, i + 600));
@@ -346,7 +348,7 @@ async function word_hint_get_picture(name, from, content, kwargs = {}) {
             //     });
             // }
             await page.goto(`file://${process.cwd()}/word_hint_template.html`, { waitUntil: 'domcontentloaded' });
-            await page.evaluate((name, from, content, is_first, kwargs) => {
+            await page.evaluate((name, from, content, is_first, kwargs, heatmap) => {
                 document.getElementsByClassName("box_type")[0].textContent = is_first ? `【${name}】` : `【${name}】续`;
                 let box_terms = document.getElementsByClassName('box_term');
                 let box_terms2 = document.getElementsByClassName('box_term2');
@@ -359,6 +361,36 @@ async function word_hint_get_picture(name, from, content, kwargs = {}) {
                 box_terms2[0].textContent = `字数：${content.num_of_char}`;
                 box_terms2[1].textContent = `选重：${content.num_of_candidate}`;
                 box_terms2[2].textContent = `缺字：${content.num_of_que}`;
+                if (is_first) {
+                    const container = document.getElementById('word_hint_heatmap');
+                    for (const row of heatmap.rows) {
+                        const rowNode = document.createElement('div');
+                        rowNode.className = 'heatmap_row';
+                        for (const key of row) {
+                            const keyNode = document.createElement('div');
+                            const labelNode = document.createElement('span');
+                            const countNode = document.createElement('span');
+                            const count = heatmap.counts[key.key] || 0;
+                            const intensity = heatmap.max === 0 ? 0 : count / heatmap.max;
+                            const lightness = Math.round(96 - intensity * 56);
+                            keyNode.className = 'heatmap_key';
+                            labelNode.className = 'heatmap_key_label';
+                            countNode.className = 'heatmap_key_count';
+                            keyNode.style.flex = `${key.width || 1} 1 0`;
+                            keyNode.style.backgroundColor = count === 0
+                                ? '#f2f3f5'
+                                : `hsl(210, 85%, ${lightness}%)`;
+                            keyNode.style.color = count > 0 && lightness < 62 ? '#ffffff' : '#202124';
+                            labelNode.textContent = key.label;
+                            if (count) countNode.textContent = count;
+                            keyNode.title = `${key.title || key.label}: ${count} 次`;
+                            keyNode.appendChild(labelNode);
+                            keyNode.appendChild(countNode);
+                            rowNode.appendChild(keyNode);
+                        }
+                        container.appendChild(rowNode);
+                    }
+                }
                 for (let i = 0; i < content.show_list.length; i++) {
                     let node = document.createElement('div');
                     let word = document.createElement('div');
@@ -391,7 +423,7 @@ async function word_hint_get_picture(name, from, content, kwargs = {}) {
                     node.appendChild(code);
                     document.getElementsByClassName('box_word')[0].appendChild(node);
                 }
-            }, name, from, content, is_first, kwargs);
+            }, name, from, content, is_first, kwargs, heatmap);
             await page.waitForNetworkIdle({ idleTime: 50 })
             // bot.logger.warn(await page.content());
             let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });

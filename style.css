@@ -121,6 +121,50 @@
     font-size: 18pt;
 }
 
+.word_hint_heatmap {
+    margin: 8px 0 12px;
+    width: min(100%, 720px);
+    font-family: var(--code_font);
+    font-variant-ligatures: none;
+}
+
+.heatmap_row {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 3px;
+}
+
+.heatmap_key {
+    position: relative;
+    box-sizing: border-box;
+    min-width: 0;
+    height: 27px;
+    padding: 5px 2px;
+    border: 1px solid #d9dce1;
+    border-radius: 3px;
+    overflow: hidden;
+    color: #202124;
+    font-size: 9pt;
+    line-height: 15px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.heatmap_key_label {
+    display: block;
+    font-size: 9pt;
+    line-height: 15px;
+}
+
+.heatmap_key_count {
+    position: absolute;
+    right: 3px;
+    bottom: 1px;
+    color: inherit;
+    font-size: 6.5pt;
+    line-height: 9px;
+}
+
 .is_chong {
     font-weight: bold;
     color: red;
