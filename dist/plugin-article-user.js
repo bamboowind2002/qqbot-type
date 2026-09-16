@@ -8,6 +8,9 @@ import { compileScoreCondition, getArticleSession, openArticleSession, closeArti
 import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
+import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
+import { isDifficultyMatch } from './articleDifficulty.js';
+import crypto from 'node:crypto';
 import { listArticles } from './articleStorage.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -81,7 +84,20 @@ async function difficultyMode(e, difficulty, args) {
   const articles = [];
   for (const title of listArticles()) articles.push({ title, text: await readArticle(title) });
   const map = await readDifficultyMap();
-  const result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
+  let result = null;
+  const byTitle = new Map(articles.map(article => [article.title, article]));
+  for (const cached of candidateCacheGet(parsed.length, difficulty)) {
+    const article = byTitle.get(cached.title);
+    if (!article) continue;
+    const chars = [...article.text];
+    if (cached.start < 0 || cached.start + parsed.length > chars.length) continue;
+    const text = chars.slice(cached.start, cached.start + parsed.length).join('');
+    const [score, , rank, error] = get_rank(text);
+    if (!error && isDifficultyMatch(score, difficulty)) { result = { title: cached.title, text, start: cached.start, score, rank }; break; }
+  }
+  if (!result) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
+  const revision = crypto.createHash('sha256').update(byTitle.get(result.title).text).digest('hex');
+  candidateCachePut({ length: parsed.length, difficulty, title: result.title, revision, start: result.start, score: result.score });
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);

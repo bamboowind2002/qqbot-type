@@ -3,6 +3,11 @@ export const DIFFICULTY_RANGES = Object.freeze({
   '普': [0.8, 5], '难': [5, 15], '虐': [15, 100], '爆': [100, Infinity], '爆表': [100, Infinity]
 });
 
+export function isDifficultyMatch(score, difficulty) {
+  const [low, high] = DIFFICULTY_RANGES[normalizeDifficulty(difficulty)];
+  return score >= low && score < high;
+}
+
 export function normalizeDifficulty(value) {
   const name = String(value || '').trim();
   if (!DIFFICULTY_RANGES[name]) throw new Error('难度只能是：淼、水、易、普、难、虐或爆表。');
