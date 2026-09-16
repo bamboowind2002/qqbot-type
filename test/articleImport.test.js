@@ -26,3 +26,8 @@ test('parses the public text-list API response', () => {
   assert.equal(result[0].body, '正文');
   assert.match(result[0].source, /a_id=2/);
 });
+
+test('keeps whitespace titles available for per-item rejection', () => {
+  const result = parseTextListResponse({ list: [{ a_id: '3', a_name: '带 空格', a_content: '正文' }] });
+  assert.equal(result[0].title, '带 空格');
+});

@@ -67,7 +67,7 @@ async function fetchTextList({ page = 1, pageSize = IMPORT_LIMIT, keyword = '', 
 export function parseTextListResponse(data) {
   if (!Array.isArray(data?.list)) throw new Error('文本列表数据缺少 list。');
   return data.list.map(item => ({
-    title: validateArticleTitle(item.a_name), body: String(item.a_content || ''),
+    title: String(item.a_name || '').trim(), body: String(item.a_content || ''),
     source: `${TEXT_LIST_URL}?a_id=${encodeURIComponent(item.a_id || item.a_name)}`,
     metadata: { id: item.a_id, author: item.a_author, createdAt: item.a_create_time, chars: item.a_zs }
   }));
@@ -115,6 +115,7 @@ export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, sa
   let bytes = 0, lastRequest = 0;
   for (const item of parseTextListResponse(data).slice(0, limit)) {
     try {
+      validateArticleTitle(item.title);
       const delay = IMPORT_INTERVAL_MS - (now() - lastRequest);
       if (lastRequest && delay > 0) await sleep(delay);
       lastRequest = now();
