@@ -50,7 +50,7 @@ function rgbToHex(rgb) {
 
 export function getWordHintHeatmapStyle(count, max) {
     if (count <= 0 || max <= 0) {
-        return { backgroundColor: '#f2f3f5', color: '#202124' };
+        return { backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124' };
     }
 
     const position = Math.min(1, count / max) * (HEATMAP_STOPS.length - 1);
@@ -65,6 +65,7 @@ export function getWordHintHeatmapStyle(count, max) {
     const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     return {
         backgroundColor: rgbToHex(rgb),
+        borderColor: rgbToHex(rgb.map(value => Math.max(0, Math.round(value * 0.72)))),
         color: luminance < 0.55 ? '#ffffff' : '#202124'
     };
 }

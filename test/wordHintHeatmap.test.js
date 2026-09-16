@@ -57,10 +57,10 @@ test('heatmap counts only C++ up-arrow output as left Shift', () => {
 
 test('heatmap colors use a linear blue gradient with contrast-aware text', () => {
     assert.deepEqual(getWordHintHeatmapStyle(0, 10), {
-        backgroundColor: '#f2f3f5', color: '#202124'
+        backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124'
     });
     assert.deepEqual(getWordHintHeatmapStyle(1, 1), {
-        backgroundColor: '#08519c', color: '#ffffff'
+        backgroundColor: '#08519c', borderColor: '#063a70', color: '#ffffff'
     });
     assert.notEqual(getWordHintHeatmapStyle(2, 10).backgroundColor, getWordHintHeatmapStyle(8, 10).backgroundColor);
 });
