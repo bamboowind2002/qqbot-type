@@ -3,7 +3,7 @@ import { bot } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
 import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle } from './articleStorage.js';
-import { syncDifficultyMap, getDifficultyMapStatus, cancelDifficultyMapSync } from './articleMap.js';
+import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
 
 const deleteTokens = new Map();
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -28,15 +28,15 @@ async function handleAdmin(e, command) {
   const args = command.args;
   if (command.action === 'admin-help') return send(e, ARTICLE_HELP);
   if (command.action === 'map-status') {
-    const status = getDifficultyMapStatus();
+    const status = getDifficultyMapTaskStatus();
     if (!status.running) return send(e, '难度地图当前没有同步任务。');
     return send(e, `难度地图同步中：${status.processed}/${status.total} 篇，已生成 ${status.records} 条记录${status.cancelRequested ? '，等待取消' : ''}。`);
   }
-  if (command.action === 'map-cancel') return send(e, cancelDifficultyMapSync() ? '已请求取消难度地图同步。' : '当前没有正在运行的难度地图任务。');
+  if (command.action === 'map-cancel') return send(e, cancelDifficultyMapTask() ? '已请求取消难度地图同步。' : '当前没有正在运行的难度地图任务。');
   if (command.action === 'map-sync') {
     if (command.args?.length) throw new Error('格式：》管 索');
     send(e, '难度地图同步已开始。');
-    const result = await syncDifficultyMap();
+    const result = await startDifficultyMapTask();
     return send(e, result.cancelled ? '难度地图同步已取消，已提交的旧地图保持不变。' : `难度地图同步完成，共 ${result.records.length} 条记录，变更 ${result.changed} 篇文章。`);
   }
   if (command.action === 'upload') {

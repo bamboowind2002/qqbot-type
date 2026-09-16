@@ -45,7 +45,7 @@ export function cancelDifficultyMapSync() {
   return true;
 }
 
-export async function syncDifficultyMap() {
+export async function syncDifficultyMap(onProgress = () => {}) {
   if (task) throw new Error('难度地图正在同步中。');
   task = { processed: 0, total: 0, changed: 0, records: 0, startedAt: Date.now() };
   cancelRequested = false;
@@ -74,6 +74,7 @@ export async function syncDifficultyMap() {
       }
       task.processed++;
       task.records = records.length;
+      onProgress({ processed: task.processed, total: task.total, changed: task.changed, records: task.records });
     }
     const unique = new Map(records.map(record => [`${record.title}:${record.start}`, record]));
     const limited = [...unique.values()].sort((a, b) => hash(`${a.title}:${a.start}`).localeCompare(hash(`${b.title}:${b.start}`))).slice(0, ARTICLE_MAP_MAX_RECORDS);
