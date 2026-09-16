@@ -87,9 +87,14 @@ async function difficultyMode(e, difficulty, args) {
   const articles = [];
   for (const title of listArticles()) articles.push({ title, text: await readArticle(title) });
   const map = await readDifficultyMap();
+  const previous = getArticleSession(sessionKey(e));
+  const sameMode = previous?.mode === 'difficulty' && previous.length === parsed.length && previous.difficulty === normalizeDifficulty(difficulty);
+  const recent = sameMode ? (previous.recentSegments || []) : [];
+  const excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
   let result = null;
   const byTitle = new Map(articles.map(article => [article.title, article]));
-  for (const cached of candidateCacheGet(parsed.length, difficulty)) {
+  const cachedCandidates = candidateCacheGet(parsed.length, difficulty).filter(cached => !excluded.has(`${cached.title}:${cached.start}`));
+  for (const cached of cachedCandidates.sort(() => Math.random() - 0.5)) {
     const article = byTitle.get(cached.title);
     if (!article) continue;
     const chars = [...article.text];
@@ -98,13 +103,16 @@ async function difficultyMode(e, difficulty, args) {
     const [score, , rank, error] = get_rank(text);
     if (!error && isDifficultyMatch(score, difficulty)) { result = { title: cached.title, text, start: cached.start, score, rank }; break; }
   }
-  if (!result) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
+  if (!result) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || [], excluded);
+  if (!result && excluded.size) result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
+  if (!result) throw new Error('没有找到可用段落。');
   const revision = crypto.createHash('sha256').update(byTitle.get(result.title).text).digest('hex');
   candidateCachePut({ length: parsed.length, difficulty, title: result.title, revision, start: result.start, score: result.score });
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
-  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalizeDifficulty(difficulty), length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text });
+  const recentSegments = [...recent, { title: result.title, start: result.start }].slice(-20);
+  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalizeDifficulty(difficulty), length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text, recentSegments });
   return send(e, output);
 }
 

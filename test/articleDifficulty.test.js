@@ -23,3 +23,8 @@ test('prefers nearby map records before random fallback', () => {
   const result = chooseDifficultySegment(articles, 10, '水', () => [0.2, 'shui', '水', false], () => 0, () => Date.now(), hints);
   assert.equal(result.title, '乙');
 });
+
+test('can exclude recently used difficulty segments', () => {
+  const result = chooseDifficultySegment([{ title: '甲', text: '甲'.repeat(300) }], 100, '水', () => [0.2, 0, '水', null], () => 0.5, () => 0, [], new Set(['甲:0']));
+  assert.notEqual(result.start, 0);
+});

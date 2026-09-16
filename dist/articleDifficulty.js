@@ -21,7 +21,7 @@ function distance(score, [low, high]) {
 
 function inRange(score, [low, high]) { return score >= low && score < high; }
 
-export function chooseDifficultySegment(articles, length, difficulty, getRank, random = Math.random, now = () => Date.now(), hints = []) {
+export function chooseDifficultySegment(articles, length, difficulty, getRank, random = Math.random, now = () => Date.now(), hints = [], excluded = new Set()) {
   difficulty = normalizeDifficulty(difficulty);
   if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error('每段字数必须是 10 至 2000 的整数。');
   const eligible = articles.filter(article => [...article.text].length >= length);
@@ -42,6 +42,7 @@ export function chooseDifficultySegment(articles, length, difficulty, getRank, r
     const start = source.start == null
       ? Math.floor(random() * (maxStart + 1))
       : Math.max(0, Math.min(maxStart, source.start + Math.floor((random() - 0.5) * 2 * ARTICLE_HINT_MIN_LENGTH)));
+    if (excluded.has(`${article.title}:${start}`)) { attempts++; continue; }
     const text = chars.slice(start, start + length).join(''), [score, , rank, error] = getRank(text);
     attempts++;
     if (error) continue;
