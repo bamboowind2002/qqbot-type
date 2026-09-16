@@ -5,6 +5,8 @@ import { getArticleSettings, selectArticle, setSegmentLength, getProgress, setPr
 import { parseSegmentArguments, orderedSegment, randomParagraph, randomCharacters } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
+import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
+import { get_rank } from './rank.js';
 import { listArticles } from './articleStorage.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -72,9 +74,23 @@ async function articleMode(e, mode, args) {
   return send(e, output);
 }
 
+async function difficultyMode(e, difficulty, args) {
+  const settings = await getArticleSettings(consql, userId(e));
+  const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
+  const articles = [];
+  for (const title of listArticles()) articles.push({ title, text: await readArticle(title) });
+  const result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank);
+  await setSegmentLength(consql, userId(e), parsed.length);
+  const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
+  const number = Number(output.match(/第(\d+)段/u)?.[1]);
+  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalizeDifficulty(difficulty), length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text });
+  return send(e, output);
+}
+
 async function continueSession(e, session, force = false) {
   touchArticleSession(session);
   if (session.mode === 'ordered') await setProgress(consql, userId(e), session.title, session.nextPosition);
+  if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)]);
   return articleMode(e, session.mode, [String(session.length), session.title]);
 }
 
@@ -125,6 +141,13 @@ bot.on('message', async e => {
     if (command.action === '顺' || command.action === '顺序发文') return articleMode(e, 'ordered', command.args);
     if (command.action === '随' || command.action === '随机段落发文') return articleMode(e, 'paragraph', command.args);
     if (command.action === '乱' || command.action === '随机选字发文') return articleMode(e, 'characters', command.args);
+    if (command.action === '难度发文') {
+      if (!command.args?.length) throw new Error('格式：》难度发文 <淼|水|易|普|难|虐|爆表> [字数]');
+      const difficulty = command.args[0];
+      return difficultyMode(e, difficulty, command.args.slice(1));
+    }
+    const difficultyAliases = { '淼': '淼', '水': '水', '易': '易', '普': '普', '难': '难', '虐': '虐', '爆': '爆表' };
+    if (difficultyAliases[command.action]) return difficultyMode(e, difficultyAliases[command.action], command.args);
     if (['上', '上一段', '下', '下一段', '停', '结束发文', '自', '设置自动续段'].includes(command.action)) return handleSessionCommand(e, command);
     return;
   } catch (err) { send(e, `发文操作失败：${err.message}`); }

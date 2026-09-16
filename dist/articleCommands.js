@@ -18,7 +18,8 @@ export function parseArticleCommand(raw) {
     const map = { '传': 'upload', '上传': 'upload', '改': 'replace', '替换': 'replace', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete' };
     return { action: map[op] || 'admin-help', args: rest };
   }
-  return { action: head, args: rest };
+  const difficultyAliases = new Set(['淼', '水', '易', '普', '难', '虐', '爆', '难度发文']);
+  return { action: head, args: rest, difficulty: difficultyAliases.has(head) };
 }
 
 export function extractDirectArticleText(message) {
