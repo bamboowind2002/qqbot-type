@@ -2,7 +2,7 @@ import { randomInt } from 'node:crypto';
 import { bot } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, listArticles, replaceArticleRange, deleteArticle, validateArticleTitle } from './articleStorage.js';
+import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle } from './articleStorage.js';
 
 const deleteTokens = new Map();
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -52,20 +52,11 @@ async function handleAdmin(e, command) {
   }
 }
 
-async function handleList(e, command) {
-  let names = listArticles();
-  if (command.keyword) names = names.filter(name => name.includes(command.keyword));
-  if (!names.length) return send(e, '暂无文章。');
-  const page = Math.max(1, command.page || 1), size = 50, pages = Math.ceil(names.length / size);
-  return send(e, `文章列表（${page}/${pages}，共 ${names.length} 篇）\n${names.slice((page - 1) * size, page * size).join('\n')}`);
-}
-
 bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
     if (command.action === 'help') return send(e, ARTICLE_HELP);
-    if (command.action === 'list') return handleList(e, command);
     if (['upload', 'replace', 'delete', 'confirm-delete', 'admin-help'].includes(command.action)) return handleAdmin(e, command);
   } catch (err) { if (isArticleAdmin(e.sender?.user_id)) send(e, `发文管理失败：${err.message}`); }
 });
