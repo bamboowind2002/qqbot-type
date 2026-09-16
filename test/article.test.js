@@ -10,7 +10,9 @@ test('normalizes BOM, supported legacy encodings, and all Unicode whitespace', (
 });
 
 test('validates article titles as path-safe Unicode names', () => {
-  assert.equal(validateArticleTitle('  中文  '), '中文');
+  assert.equal(validateArticleTitle('中文'), '中文');
+  assert.throws(() => validateArticleTitle('中文 标题'), /空格/);
+  assert.throws(() => validateArticleTitle('中文\u3000标题'), /空格/);
   assert.throws(() => validateArticleTitle('../秘密'), /路径/);
   assert.throws(() => validateArticleTitle(''), /不能为空/);
 });

@@ -17,6 +17,7 @@ export function validateArticleTitle(title) {
   if (!title || title === '.' || title === '..') throw new Error('文章标题不能为空。');
   if ([...title].length > 255) throw new Error('文章标题不能超过 255 个字符。');
   if (/[\\/\u0000-\u001f\u007f]/u.test(title)) throw new Error('文章标题不能包含路径分隔符或控制字符。');
+  if (/\p{White_Space}/u.test(title)) throw new Error('文章标题不能包含空格或其他空白字符。');
   return title;
 }
 
