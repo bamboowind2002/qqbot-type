@@ -4,6 +4,7 @@ import { parseArticleCommand, extractDirectArticleText } from './articleCommands
 import { getArticleSettings, selectArticle, setSegmentLength, getProgress, setProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, orderedSegment, randomParagraph, randomCharacters } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
+import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { listArticles } from './articleStorage.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -51,7 +52,9 @@ async function search(e, args) {
 
 async function articleMode(e, mode, args) {
   const settings = await getArticleSettings(consql, userId(e));
-  const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
+  const split = (args || []).join(' ').split(/\s*\|\s*/u);
+  const parsed = parseSegmentArguments(split[0].trim().split(/\s+/).filter(Boolean), Number(settings.segment_length) || 100);
+  const condition = split.length > 1 ? split.slice(1).join('|').trim() : '';
   const title = parsed.title || settings.current_title;
   if (!title) throw new Error('尚未选择文章，请先发送“》选 <标题>”或在命令后附文章标题。');
   const body = await readArticle(title), chars = [...body];
@@ -59,11 +62,50 @@ async function articleMode(e, mode, args) {
   let segment;
   if (mode === 'ordered') {
     const position = await getProgress(consql, userId(e), title);
+    if (position >= chars.length) throw new Error('这篇文章已经发完了。');
     segment = orderedSegment(chars, position, parsed.length);
-    await setProgress(consql, userId(e), title, segment.nextPosition);
   } else if (mode === 'paragraph') segment = randomParagraph(chars, parsed.length);
   else segment = randomCharacters(chars, parsed.length);
-  return send(e, formatArticleMessage(segment.text, { title, trigger: triggerName(e) }));
+  const output = formatArticleMessage(segment.text, { title, trigger: triggerName(e) });
+  const number = Number(output.match(/第(\d+)段/u)?.[1]);
+  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body });
+  return send(e, output);
+}
+
+async function continueSession(e, session, force = false) {
+  touchArticleSession(session);
+  if (session.mode === 'ordered') await setProgress(consql, userId(e), session.title, session.nextPosition);
+  return articleMode(e, session.mode, [String(session.length), session.title]);
+}
+
+async function handleSessionCommand(e, command) {
+  const key = sessionKey(e), session = getArticleSession(key);
+  if (command.action === '停' || command.action === '结束发文') { closeArticleSession(key); return send(e, '当前发文会话已结束。'); }
+  if (command.action === '自' || command.action === '设置自动续段') {
+    if (!session) throw new Error('当前没有发文会话。');
+    const conditionText = (command.args || []).join(' ').trim();
+    session.condition = compileScoreCondition(conditionText); session.conditionText = conditionText; touchArticleSession(session);
+    return send(e, conditionText ? `自动续段条件已设置：${conditionText}` : '已恢复无条件自动续段。');
+  }
+  if (command.action === '下' || command.action === '下一段') {
+    if (!session) throw new Error('当前没有发文会话。');
+    return continueSession(e, session, true);
+  }
+  if (command.action === '上' || command.action === '上一段') {
+    if (!session || session.mode !== 'ordered') throw new Error('只有顺序发文支持回到上一段。');
+    const position = Math.max(0, session.startPosition - session.length);
+    await setProgress(consql, userId(e), session.title, position);
+    closeArticleSession(key);
+    return articleMode(e, 'ordered', [String(session.length), session.title]);
+  }
+}
+
+async function handleScore(e) {
+  const score = parseScore(e.raw_message);
+  if (!score) return;
+  const session = getArticleSession(sessionKey(e));
+  if (!session || score.segment !== session.segment || !session.condition(score.metrics)) return;
+  await continueSession(e, session);
 }
 
 bot.on('message', async e => {
@@ -83,5 +125,12 @@ bot.on('message', async e => {
     if (command.action === '顺' || command.action === '顺序发文') return articleMode(e, 'ordered', command.args);
     if (command.action === '随' || command.action === '随机段落发文') return articleMode(e, 'paragraph', command.args);
     if (command.action === '乱' || command.action === '随机选字发文') return articleMode(e, 'characters', command.args);
+    if (['上', '上一段', '下', '下一段', '停', '结束发文', '自', '设置自动续段'].includes(command.action)) return handleSessionCommand(e, command);
+    return;
   } catch (err) { send(e, `发文操作失败：${err.message}`); }
+});
+
+bot.on('message', async e => {
+  if (String(e.raw_message || '').startsWith('》')) return;
+  try { await handleScore(e); } catch (err) { console.warn('处理发文成绩失败：', err.message); }
 });
