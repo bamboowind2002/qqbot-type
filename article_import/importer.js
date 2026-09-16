@@ -10,6 +10,10 @@ export const TEXT_LIST_URL = 'https://www.jsxiaoshi.com/Home/Cloud/getTextList';
 
 const DEFAULT_RANK_URL = 'https://www.jsxiaoshi.com/result_rank.html';
 
+export function normalizeImportedTitle(title) {
+  return String(title ?? '').replace(/\p{White_Space}/gu, '').trim();
+}
+
 function decodeEntities(value) {
   return value.replace(/&(#x[\da-f]+|#\d+|nbsp|amp|lt|gt|quot|apos);/giu, (_, entity) => {
     if (entity.toLowerCase() === 'nbsp') return ' ';
@@ -40,10 +44,11 @@ export function parseArticleDetail(html, sourceUrl = '') {
   const nameMatch = content.match(/文本名：\s*([^\n]+)/u);
   const bodyMatch = content.match(/文本内容：\s*([\s\S]*?)(?:\n\s*评论\s*\(?\d*\)?|\n\s*程序统计|\s*$)/u);
   if (!nameMatch || !bodyMatch) throw new Error(`详情页未找到文本名或正文：${sourceUrl}`);
-  const title = validateArticleTitle(nameMatch[1].trim());
+  const originalTitle = nameMatch[1].trim();
+  const title = validateArticleTitle(normalizeImportedTitle(originalTitle));
   const body = bodyMatch[1].trim();
   if (!body) throw new Error(`详情页正文为空：${sourceUrl}`);
-  return { title, body };
+  return { title, originalTitle, body };
 }
 
 async function fetchText(url, signal) {
@@ -67,7 +72,7 @@ async function fetchTextList({ page = 1, pageSize = IMPORT_LIMIT, keyword = '', 
 export function parseTextListResponse(data) {
   if (!Array.isArray(data?.list)) throw new Error('文本列表数据缺少 list。');
   return data.list.map(item => ({
-    title: String(item.a_name || '').trim(), body: String(item.a_content || ''),
+    title: normalizeImportedTitle(item.a_name), originalTitle: String(item.a_name || '').trim(), body: String(item.a_content || ''),
     source: `${TEXT_LIST_URL}?a_id=${encodeURIComponent(item.a_id || item.a_name)}`,
     metadata: { id: item.a_id, author: item.a_author, createdAt: item.a_create_time, chars: item.a_zs }
   }));
@@ -123,7 +128,7 @@ export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, sa
       if (!item.body || bytes + size > IMPORT_MAX_BYTES) break;
       const saved = await save(item.title, item.body, 'utf-8');
       bytes += size; imported.push(saved);
-      sources.push({ ...item.metadata, title: saved.title, url: item.source, importedAt: new Date().toISOString(), bytes: size });
+      sources.push({ ...item.metadata, originalTitle: item.originalTitle, title: saved.title, url: item.source, importedAt: new Date().toISOString(), bytes: size });
     } catch (error) { failed.push({ title: item.title, error: error.message }); }
   }
   await fs.mkdir(path.dirname(IMPORT_SOURCE_MANIFEST), { recursive: true });

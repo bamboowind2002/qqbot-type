@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRankPage, parseArticleDetail, parseTextListResponse, IMPORT_LIMIT, IMPORT_MAX_BYTES } from '../article_import/importer.js';
+import { parseRankPage, parseArticleDetail, parseTextListResponse, normalizeImportedTitle, IMPORT_LIMIT, IMPORT_MAX_BYTES } from '../article_import/importer.js';
 
 test('extracts unique result detail links from a rank page', () => {
   const html = '<a href="/result_search?ranktext=%E7%94%B2">甲</a><a href="/result_search?ranktext=%E7%94%B2">重复</a><a href="/result_search?ranktext=%E4%B9%99">乙</a>';
@@ -12,7 +12,7 @@ test('extracts unique result detail links from a rank page', () => {
 
 test('extracts title and body from a result detail page', () => {
   const result = parseArticleDetail('<div>文本名：银杏</div><div>文本内容：<br>我们的小区里，有一棵树。<br>秋天很美。</div><div>评论(0)</div>');
-  assert.deepEqual(result, { title: '银杏', body: '我们的小区里，有一棵树。\n秋天很美。' });
+  assert.deepEqual(result, { title: '银杏', originalTitle: '银杏', body: '我们的小区里，有一棵树。\n秋天很美。' });
 });
 
 test('keeps import limits explicit', () => {
@@ -27,7 +27,9 @@ test('parses the public text-list API response', () => {
   assert.match(result[0].source, /a_id=2/);
 });
 
-test('keeps whitespace titles available for per-item rejection', () => {
+test('removes whitespace from imported titles while retaining the source title', () => {
   const result = parseTextListResponse({ list: [{ a_id: '3', a_name: '带 空格', a_content: '正文' }] });
-  assert.equal(result[0].title, '带 空格');
+  assert.equal(result[0].title, '带空格');
+  assert.equal(result[0].originalTitle, '带 空格');
+  assert.equal(normalizeImportedTitle('  四\u3000季 '), '四季');
 });
