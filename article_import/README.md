@@ -1,8 +1,14 @@
 # 文章语料导入器
 
-这是一个一次性、受限的极速打字网文章导入工具。它从排行榜页面发现 `result_search` 详情链接，逐篇读取正文并复用机器人文章存储模块保存。
+这是一个一次性、受限的极速打字网文章导入工具。它使用网页文本选择器实际调用的公开 POST 接口 `/Home/Cloud/getTextList`，接口直接返回文本名称和正文；也兼容从排行榜页面发现 `result_search` 详情链接的旧路径。
 
 运行：
+
+```bash
+node article_import/importer.js
+```
+
+也可以传入排行榜页面 URL，作为接口不可用时的详情页路径：
 
 ```bash
 node article_import/importer.js https://www.jsxiaoshi.com/result_rank.html
