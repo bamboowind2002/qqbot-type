@@ -16,7 +16,7 @@ test('extracts title and body from a result detail page', () => {
 });
 
 test('keeps import limits explicit', () => {
-  assert.equal(IMPORT_LIMIT, 10);
+  assert.equal(IMPORT_LIMIT, 1000);
   assert.equal(IMPORT_MAX_BYTES, 20 * 1024 * 1024);
 });
 

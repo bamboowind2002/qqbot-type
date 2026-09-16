@@ -2,9 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { saveArticle, ARTICLE_DIR, validateArticleTitle } from '../dist/articleStorage.js';
 
-export const IMPORT_LIMIT = 10;
+export const IMPORT_LIMIT = 1000;
 export const IMPORT_MAX_BYTES = 20 * 1024 * 1024;
-export const IMPORT_INTERVAL_MS = 1000;
+export const IMPORT_INTERVAL_MS = 200;
 export const IMPORT_SOURCE_MANIFEST = path.join(ARTICLE_DIR, 'import-sources.json');
 export const TEXT_LIST_URL = 'https://www.jsxiaoshi.com/Home/Cloud/getTextList';
 
@@ -80,7 +80,7 @@ export function parseTextListResponse(data) {
 
 function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-export async function importArticles({ rankUrls = [DEFAULT_RANK_URL], limit = IMPORT_LIMIT, fetchPage = fetchText, save = saveArticle, sleep = wait, now = () => Date.now(), signal } = {}) {
+export async function importArticles({ rankUrls = [DEFAULT_RANK_URL], limit = IMPORT_LIMIT, fetchPage = fetchText, save = saveArticle, sleep = wait, now = () => Date.now(), signal, onProgress = () => {} } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > IMPORT_LIMIT) throw new Error(`单次最多导入 ${IMPORT_LIMIT} 篇。`);
   const links = [];
   for (const rankUrl of rankUrls) {
@@ -94,7 +94,8 @@ export async function importArticles({ rankUrls = [DEFAULT_RANK_URL], limit = IM
   }
   const imported = [], failed = [], sources = [];
   let bytes = 0, lastRequest = 0;
-  for (const link of links.slice(0, limit)) {
+  const selectedLinks = links.slice(0, limit);
+  for (const [index, link] of selectedLinks.entries()) {
     try {
       const delay = IMPORT_INTERVAL_MS - (now() - lastRequest);
       if (lastRequest && delay > 0) await sleep(delay);
@@ -107,18 +108,20 @@ export async function importArticles({ rankUrls = [DEFAULT_RANK_URL], limit = IM
       imported.push(saved);
       sources.push({ title: saved.title, url: link.url, importedAt: new Date().toISOString(), bytes: size });
     } catch (error) { failed.push({ url: link.url, error: error.message }); }
+    onProgress({ completed: index + 1, total: selectedLinks.length, title: link.label || link.url, imported: imported.length, failed: failed.length, bytes });
   }
   await fs.mkdir(path.dirname(IMPORT_SOURCE_MANIFEST), { recursive: true });
   await fs.writeFile(IMPORT_SOURCE_MANIFEST, JSON.stringify({ updatedAt: new Date().toISOString(), sources }, null, 2));
   return { imported, failed, bytes, sources };
 }
 
-export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, save = saveArticle, sleep = wait, now = () => Date.now(), signal } = {}) {
+export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, save = saveArticle, sleep = wait, now = () => Date.now(), signal, onProgress = () => {} } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > IMPORT_LIMIT) throw new Error(`单次最多导入 ${IMPORT_LIMIT} 篇。`);
   const data = await fetchTextList({ page, pageSize: limit, signal });
   const imported = [], failed = [], sources = [];
   let bytes = 0, lastRequest = 0;
-  for (const item of parseTextListResponse(data).slice(0, limit)) {
+  const items = parseTextListResponse(data).slice(0, limit);
+  for (const [index, item] of items.entries()) {
     try {
       validateArticleTitle(item.title);
       const delay = IMPORT_INTERVAL_MS - (now() - lastRequest);
@@ -130,6 +133,7 @@ export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, sa
       bytes += size; imported.push(saved);
       sources.push({ ...item.metadata, originalTitle: item.originalTitle, title: saved.title, url: item.source, importedAt: new Date().toISOString(), bytes: size });
     } catch (error) { failed.push({ title: item.title, error: error.message }); }
+    onProgress({ completed: index + 1, total: items.length, title: item.title || item.originalTitle, imported: imported.length, failed: failed.length, bytes });
   }
   await fs.mkdir(path.dirname(IMPORT_SOURCE_MANIFEST), { recursive: true });
   await fs.writeFile(IMPORT_SOURCE_MANIFEST, JSON.stringify({ updatedAt: new Date().toISOString(), sources }, null, 2));
@@ -138,7 +142,8 @@ export async function importArticlesFromApi({ page = 1, limit = IMPORT_LIMIT, sa
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const rankUrls = process.argv.slice(2).filter(arg => !arg.startsWith('-'));
-  const run = rankUrls.length ? importArticles({ rankUrls }) : importArticlesFromApi();
+  const onProgress = progress => console.log(`[${progress.completed}/${progress.total}] ${progress.title} | 成功 ${progress.imported} | 失败 ${progress.failed} | ${progress.bytes} 字节`);
+  const run = rankUrls.length ? importArticles({ rankUrls, onProgress }) : importArticlesFromApi({ onProgress });
   run.then(result => console.log(`导入完成：接口共 ${result.total || '-'} 篇，成功 ${result.imported.length} 篇，失败 ${result.failed.length} 篇，共 ${result.bytes} 字节。`))
     .catch(error => { console.error(`导入失败：${error.message}`); process.exitCode = 1; });
 }
