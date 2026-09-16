@@ -77,10 +77,7 @@ test('heatmap maps frequency with log(1+x) normalized to [0, 1]', () => {
     assert.notEqual(low.backgroundColor, high.backgroundColor);
 });
 
-test('heatmap chooses text color from the actual background brightness', () => {
-    assert.equal(getWordHintHeatmapStyle(2, 10).color, '#202124');
-    assert.equal(getWordHintHeatmapStyle(1, 4).color, '#202124');
-    assert.equal(getWordHintHeatmapStyle(1, 3).color, '#202124');
-    assert.equal(getWordHintHeatmapStyle(3, 6).color, '#ffffff');
-    assert.equal(getWordHintHeatmapStyle(8, 10).color, '#ffffff');
+test('heatmap switches to white text at normalized intensity 0.72', () => {
+    assert.equal(getWordHintHeatmapStyle(Math.expm1(0.719 * Math.log1p(1000)), 1000).color, '#202124');
+    assert.equal(getWordHintHeatmapStyle(Math.expm1(0.72 * Math.log1p(1000)), 1000).color, '#ffffff');
 });

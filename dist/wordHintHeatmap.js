@@ -57,9 +57,8 @@ function heatmapColor(intensity) {
     ));
 }
 
-function foregroundFor(rgb) {
-    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
-    return brightness < 150 ? '#ffffff' : '#202124';
+function foregroundFor(intensity) {
+    return intensity >= 0.72 ? '#ffffff' : '#202124';
 }
 
 export function getWordHintHeatmapStyle(count, max) {
@@ -72,7 +71,7 @@ export function getWordHintHeatmapStyle(count, max) {
     return {
         backgroundColor: rgbToHex(rgb),
         borderColor: rgbToHex(rgb.map(value => Math.max(0, Math.round(value * 0.72)))),
-        color: foregroundFor(rgb)
+        color: foregroundFor(intensity)
     };
 }
 

@@ -92,7 +92,7 @@ async function rime_picture(data) {
         }, data);
         await page.waitForNetworkIdle({ idleTime: 50 })
         // bot.logger.warn(await page.content());
-        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
         // await browser.close();
         await browser.close();
         return res;

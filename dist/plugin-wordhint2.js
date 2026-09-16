@@ -173,7 +173,7 @@ async function word_hint_get_simple_search_picture(name, from, content, kwargs =
         }, name, from, content);
         await page.waitForNetworkIdle({ idleTime: 50 })
         // bot.logger.warn(await page.content());
-        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
         // await browser.close();
         await browser.close();
         return res;
@@ -238,7 +238,7 @@ async function word_hint_get_simple_picture(name, from, content, kwargs = {}) {
         }, name, from, content);
         await page.waitForNetworkIdle({ idleTime: 50 })
         // bot.logger.warn(await page.content());
-        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
         // await browser.close();
         await browser.close();
         return res;
@@ -302,7 +302,7 @@ async function word_hint_get_search_picture(name, from, content, kwargs = {}) {
         }, name, from, content);
         await page.waitForNetworkIdle({ idleTime: 50 })
         // bot.logger.warn(await page.content());
-        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
         // await browser.close();
         await browser.close();
         return res;
@@ -424,7 +424,7 @@ async function word_hint_get_picture(name, from, content, kwargs = {}) {
             }, name, from, content, is_first, kwargs, heatmap);
             await page.waitForNetworkIdle({ idleTime: 50 })
             // bot.logger.warn(await page.content());
-            let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+            let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
             // await browser.close();
             await browser.close();
             return res;
@@ -546,7 +546,7 @@ async function word_hint_get_all_picture(arr, kwargs = {}) {
         }, arr, kwargs)
         await page.waitForNetworkIdle({ idleTime: 50 })
         // bot.logger.info(await page.content())
-        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'jpeg', quality: 50 });
+        let res = await page.screenshot({ encoding: 'binary', fullPage: true, type: 'webp', quality: 50 });
         await browser.close();
         return res;
     } catch (err) {
