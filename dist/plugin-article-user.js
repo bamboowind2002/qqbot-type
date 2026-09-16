@@ -7,6 +7,7 @@ import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
+import { readDifficultyMap } from './articleMap.js';
 import { listArticles } from './articleStorage.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -79,7 +80,8 @@ async function difficultyMode(e, difficulty, args) {
   const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
   const articles = [];
   for (const title of listArticles()) articles.push({ title, text: await readArticle(title) });
-  const result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank);
+  const map = await readDifficultyMap();
+  const result = chooseDifficultySegment(articles, parsed.length, difficulty, get_rank, Math.random, () => Date.now(), map.records || []);
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);

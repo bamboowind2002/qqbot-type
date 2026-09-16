@@ -16,16 +16,24 @@ function distance(score, [low, high]) {
 
 function inRange(score, [low, high]) { return score >= low && score < high; }
 
-export function chooseDifficultySegment(articles, length, difficulty, getRank, random = Math.random, now = () => Date.now()) {
+export function chooseDifficultySegment(articles, length, difficulty, getRank, random = Math.random, now = () => Date.now(), hints = []) {
   difficulty = normalizeDifficulty(difficulty);
   if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error('每段字数必须是 10 至 2000 的整数。');
   const eligible = articles.filter(article => [...article.text].length >= length);
   if (!eligible.length) throw new Error(`没有长度达到 ${length} 字的文章。`);
   const range = DIFFICULTY_RANGES[difficulty], deadline = now() + 5000;
+  const articleByTitle = new Map(eligible.map(article => [article.title, article]));
+  const hinted = hints.filter(hint => articleByTitle.has(hint.title) && hint.length >= Math.min(length, ARTICLE_HINT_MIN_LENGTH));
+  const sources = hinted.length ? hinted : eligible;
   let best = null, attempts = 0;
   while (attempts < 300 && now() <= deadline) {
-    const article = eligible[Math.floor(random() * eligible.length)];
-    const chars = [...article.text], start = Math.floor(random() * (chars.length - length + 1));
+    const source = sources[Math.floor(random() * sources.length)];
+    const article = source.title ? articleByTitle.get(source.title) : source;
+    const chars = [...article.text];
+    const maxStart = chars.length - length;
+    const start = source.start == null
+      ? Math.floor(random() * (maxStart + 1))
+      : Math.max(0, Math.min(maxStart, source.start + Math.floor((random() - 0.5) * 2 * ARTICLE_HINT_MIN_LENGTH)));
     const text = chars.slice(start, start + length).join(''), [score, , rank, error] = getRank(text);
     attempts++;
     if (error) continue;
@@ -36,3 +44,5 @@ export function chooseDifficultySegment(articles, length, difficulty, getRank, r
   }
   return best;
 }
+
+const ARTICLE_HINT_MIN_LENGTH = 100;

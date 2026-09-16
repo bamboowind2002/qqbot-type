@@ -22,6 +22,7 @@ async function loadMap() {
   try { return JSON.parse(await fs.readFile(ARTICLE_MAP_PATH, 'utf8')); }
   catch (err) { if (err.code === 'ENOENT') return { records: [] }; throw err; }
 }
+export async function readDifficultyMap() { return loadMap(); }
 async function writeMap(map) {
   await fs.mkdir(path.dirname(ARTICLE_MAP_PATH), { recursive: true });
   const temporary = `${ARTICLE_MAP_PATH}.${process.pid}.${Date.now()}.tmp`;
