@@ -35,6 +35,10 @@ logs/
 *.swo
 swapfile
 .cache/
+
+# Local planning and requirement notes
+/发文功能实现计划.md
+/发文功能需求.txt
 coverage/
 .nyc_output/
 
