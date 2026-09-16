@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseRankPage, parseArticleDetail, parseTextListResponse, normalizeImportedTitle, IMPORT_LIMIT, IMPORT_MAX_BYTES } from '../article_import/importer.js';
+import { parseBatchArgs } from '../article_import/batch-importer.js';
 
 test('extracts unique result detail links from a rank page', () => {
   const html = '<a href="/result_search?ranktext=%E7%94%B2">甲</a><a href="/result_search?ranktext=%E7%94%B2">重复</a><a href="/result_search?ranktext=%E4%B9%99">乙</a>';
@@ -32,4 +33,9 @@ test('removes whitespace from imported titles while retaining the source title',
   assert.equal(result[0].title, '带空格');
   assert.equal(result[0].originalTitle, '带 空格');
   assert.equal(normalizeImportedTitle('  四\u3000季 '), '四季');
+});
+
+test('parses resumable batch importer options', () => {
+  const options = parseBatchArgs(['--page-size=200', '--interval=800', '--start-page=3', '--max-pages=2', '--overwrite']);
+  assert.deepEqual({ pageSize: options.pageSize, interval: options.interval, startPage: options.startPage, maxPages: options.maxPages, overwrite: options.overwrite }, { pageSize: 200, interval: 800, startPage: 3, maxPages: 2, overwrite: true });
 });
