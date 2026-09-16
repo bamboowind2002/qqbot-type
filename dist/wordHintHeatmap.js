@@ -29,10 +29,10 @@ const KEYBOARD_ROWS = [
 ];
 
 const KEY_SET = new Set(KEYBOARD_ROWS.flat().map(key => key.key));
-const VIRIDIS_STOPS = [
-    [68, 1, 84], [72, 36, 117], [65, 68, 135], [53, 95, 141],
-    [42, 120, 142], [33, 145, 140], [34, 168, 132], [68, 191, 112],
-    [122, 209, 81], [189, 223, 38], [253, 231, 37]
+const YL_OR_RD_STOPS = [
+    [255, 255, 204], [255, 237, 160], [254, 217, 118],
+    [254, 178, 76], [253, 141, 60], [252, 78, 42],
+    [227, 26, 28], [189, 0, 38], [128, 0, 38]
 ];
 function normalizeKey(character) {
     if (character === '↑') return { key: 'ShiftLeft', shifted: false };
@@ -49,11 +49,11 @@ function rgbToHex(rgb) {
 
 function heatmapColor(intensity) {
     const t = Math.max(0, Math.min(1, intensity));
-    const position = t * (VIRIDIS_STOPS.length - 1);
-    const index = Math.min(VIRIDIS_STOPS.length - 2, Math.floor(position));
+    const position = t * (YL_OR_RD_STOPS.length - 1);
+    const index = Math.min(YL_OR_RD_STOPS.length - 2, Math.floor(position));
     const fraction = position - index;
-    return VIRIDIS_STOPS[index].map((value, channel) => Math.round(
-        value + (VIRIDIS_STOPS[index + 1][channel] - value) * fraction
+    return YL_OR_RD_STOPS[index].map((value, channel) => Math.round(
+        value + (YL_OR_RD_STOPS[index + 1][channel] - value) * fraction
     ));
 }
 
