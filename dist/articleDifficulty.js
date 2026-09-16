@@ -24,7 +24,10 @@ export function chooseDifficultySegment(articles, length, difficulty, getRank, r
   const range = DIFFICULTY_RANGES[difficulty], deadline = now() + 5000;
   const articleByTitle = new Map(eligible.map(article => [article.title, article]));
   const hinted = hints.filter(hint => articleByTitle.has(hint.title) && hint.length >= Math.min(length, ARTICLE_HINT_MIN_LENGTH));
-  const sources = hinted.length ? hinted : eligible;
+  const rankedHints = hinted
+    .filter(hint => Number.isFinite(hint.score))
+    .sort((a, b) => distance(a.score, range) - distance(b.score, range));
+  const sources = rankedHints.length ? rankedHints.slice(0, Math.max(20, Math.min(1000, rankedHints.length))) : eligible;
   let best = null, attempts = 0;
   while (attempts < 300 && now() <= deadline) {
     const source = sources[Math.floor(random() * sources.length)];

@@ -16,3 +16,10 @@ test('validates the seven supported difficulty names', () => {
   assert.equal(normalizeDifficulty('爆表'), '爆表');
   assert.throws(() => normalizeDifficulty('未知'), /难度只能/);
 });
+
+test('prefers nearby map records before random fallback', () => {
+  const articles = [{ title: '甲', text: 'abcdefghij' }, { title: '乙', text: 'klmnopqrst' }];
+  const hints = [{ title: '乙', start: 0, length: 100, score: 0.2 }, { title: '甲', start: 0, length: 100, score: 20 }];
+  const result = chooseDifficultySegment(articles, 10, '水', () => [0.2, 'shui', '水', false], () => 0, () => Date.now(), hints);
+  assert.equal(result.title, '乙');
+});
