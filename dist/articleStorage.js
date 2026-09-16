@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 
-export const ARTICLE_DIR = path.resolve(process.env.QQBOT_ARTICLE_DIR || './data/articles');
-export const ARTICLE_TEXT_DIR = path.join(ARTICLE_DIR, 'text');
+export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
+
 export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
 
 const ENCODINGS = new Map([
@@ -89,4 +90,9 @@ export async function replaceArticleRange(title, start, end, pattern, replacemen
   return saveArticle(title, chars.join(''), 'utf-8');
 }
 
-export async function deleteArticle(title) { await fsp.rm(articlePath(title)); return title; }
+export async function deleteArticle(title) {
+  await fsp.rm(articlePath(title));
+  const { removeArticleFromAllCategories } = await import('./articleCategories.js');
+  await removeArticleFromAllCategories(title);
+  return title;
+}

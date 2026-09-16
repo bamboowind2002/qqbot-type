@@ -4,6 +4,7 @@ import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
 import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle } from './articleStorage.js';
 import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
+import { addArticleCategory, removeArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
 
 const deleteTokens = new Map();
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -27,6 +28,18 @@ async function handleAdmin(e, command) {
   if (!isArticleAdmin(e.sender?.user_id)) return;
   const args = command.args;
   if (command.action === 'admin-help') return send(e, ARTICLE_HELP);
+  if (command.action === 'category-help') return send(e, '分类管理：》管 分类 添加 <分类名> <文章标题>；》管 分类 删除 <分类名> <文章标题>；》管 分类 列表');
+  if (command.action === 'category-list') {
+    if (args.length) throw new Error('格式：》管 分类 列表');
+    const rows = categoryStatus();
+    return send(e, rows.length ? rows.map(row => `${row.category}（${row.titles.length}篇）${row.titles.length ? `\n${row.titles.join('\n')}` : ''}`).join('\n') : '暂无分类。');
+  }
+  if (command.action === 'category-add' || command.action === 'category-remove') {
+    if (args.length < 2) throw new Error(`格式：》管 分类 ${command.action === 'category-add' ? '添加' : '删除'} <分类名> <文章标题>`);
+    const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
+    const result = command.action === 'category-add' ? await addArticleCategory(category, title) : await removeArticleCategory(category, title);
+    return send(e, command.action === 'category-add' ? `文章“${result.title}”已${result.existed ? '在' : '加入'}分类“${result.category}”。` : `文章“${result.title}”已从分类“${result.category}”移除。`);
+  }
   if (command.action === 'map-status') {
     const status = getDifficultyMapTaskStatus();
     if (!status.running) return send(e, '难度地图当前没有同步任务。');
@@ -70,6 +83,6 @@ bot.on('message', async e => {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
     if (command.action === 'help') return send(e, ARTICLE_HELP);
-    if (['upload', 'replace', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel'].includes(command.action)) return handleAdmin(e, command);
+    if (['upload', 'replace', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove'].includes(command.action)) return handleAdmin(e, command);
   } catch (err) { if (isArticleAdmin(e.sender?.user_id)) send(e, `发文管理失败：${err.message}`); }
 });

@@ -9,12 +9,19 @@ export function parseArticleCommand(raw) {
   if (!body) return { action: 'help' };
   const [head, ...rest] = body.split(/\s+/);
   if (head === '文' || head === '文章列表') {
+    let category = null;
+    if (rest[0] === '分类') { rest.shift(); category = rest.shift() || ''; }
     const page = /^\d+$/.test(rest.at(-1) || '') ? Number(rest.pop()) : 1;
-    return { action: 'list', keyword: rest.join(' '), page };
+    return category === null ? { action: 'list', keyword: rest.join(' '), page } : { action: 'list', keyword: rest.join(' '), page, category };
   }
   if (head === '管' || head === '文章管理') {
     let op = rest.shift() || '帮助';
     if (op === '确认' && rest[0] === '删除') { op = '确认删除'; rest.shift(); }
+    if (op === '分类') {
+      const sub = rest.shift() || '帮助';
+      const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list' };
+      return { action: categoryMap[sub] || 'category-help', args: rest };
+    }
     const map = { '传': 'upload', '上传': 'upload', '改': 'replace', '替换': 'replace', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete', '索': 'map-sync', '同步难度地图': 'map-sync', '状': 'map-status', '难度地图状态': 'map-status', '取消': 'map-cancel', '取消建图': 'map-cancel' };
     return { action: map[op] || 'admin-help', args: rest };
   }
@@ -26,4 +33,4 @@ export function extractDirectArticleText(message) {
   return Array.isArray(message) ? message.filter(x => x?.type === 'text').map(x => String(x.data?.text || '')).join('').trim() : '';
 }
 
-export const ARTICLE_HELP = '发文命令\n》文 [关键词] [页码]：查看文章列表\n》管 传 <标题>：管理员上传 txt 文章（可直接附文件或引用文件）\n》管 改 <起点> <终点> <标题>：下一行正则，第三行起填写替换文本\n》管 删 <标题>：请求删除文章\n》管 确认 <确认码>：确认删除\n》管 索/状/取消：同步、查看或取消难度地图';
+export const ARTICLE_HELP = '发文命令\n》文 [关键词] [页码]：查看文章列表\n》文 分类 <分类名> [关键词] [页码]：查看分类文章\n》管 传 <标题>：管理员上传 txt 文章（可直接附文件或引用文件）\n》管 改 <起点> <终点> <标题>：下一行正则，第三行起填写替换文本\n》管 删 <标题>：请求删除文章\n》管 分类 添加/删除 <分类名> <标题>：维护分类软链接\n》管 分类 列表：查看分类\n》管 确认 <确认码>：确认删除\n》管 索/状/取消：同步、查看或取消难度地图';

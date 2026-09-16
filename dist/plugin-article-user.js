@@ -12,13 +12,14 @@ import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js
 import { isDifficultyMatch } from './articleDifficulty.js';
 import crypto from 'node:crypto';
 import { listArticles } from './articleStorage.js';
+import { listCategoryArticles } from './articleCategories.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
 const userId = e => String(e.sender?.user_id ?? e.user_id);
 const triggerName = e => String(e.sender?.card || e.sender?.nickname || e.sender?.user_id || '未知用户');
 
 async function list(e, command) {
-  let names = listArticles();
+  let names = command.category ? listCategoryArticles(command.category) : listArticles();
   if (command.keyword) names = names.filter(name => name.includes(command.keyword));
   if (!names.length) return send(e, '暂无文章。');
   const page = Math.max(1, command.page || 1), size = 50;
