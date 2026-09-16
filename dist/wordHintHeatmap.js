@@ -29,11 +29,12 @@ const KEYBOARD_ROWS = [
 ];
 
 const KEY_SET = new Set(KEYBOARD_ROWS.flat().map(key => key.key));
-const HEATMAP_STOPS = [
-    [222, 235, 247],  // light blue
-    [158, 202, 225],  // blue gray
-    [66, 146, 198],   // medium blue
-    [8, 81, 156]      // dark blue
+// Google's complete Turbo colormap polynomial approximation. Keep the full
+// [0, 1] range so the low end starts at purple and the high end finishes red.
+const TURBO_COEFFICIENTS = [
+    [0.13572138, 4.61539260, -42.66032258, 132.13108234, -152.94239396, 59.28637943],
+    [0.09140261, 2.19418839, 4.84296658, -14.18503333, 4.27729857, 2.82956604],
+    [0.10667330, 12.64194608, -60.58204836, 110.36276771, -89.90310912, 27.34824973]
 ];
 function normalizeKey(character) {
     if (character === '↑') return { key: 'ShiftLeft', shifted: false };
@@ -48,22 +49,31 @@ function rgbToHex(rgb) {
     return `#${rgb.map(value => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
+function heatmapColor(intensity) {
+    const t = Math.max(0, Math.min(1, intensity));
+    const powers = [1, t, t ** 2, t ** 3, t ** 4, t ** 5];
+    return TURBO_COEFFICIENTS.map(coefficients => Math.max(0, Math.min(255, Math.round(
+        coefficients.reduce((sum, coefficient, index) =>
+            sum + coefficient * powers[index], 0) * 255
+    ))));
+}
+
+function foregroundFor(rgb) {
+    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+    return brightness < 150 ? '#ffffff' : '#202124';
+}
+
 export function getWordHintHeatmapStyle(count, max) {
     if (count <= 0 || max <= 0) {
         return { backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124' };
     }
 
-    const intensity = Math.sqrt(Math.min(1, count / max));
-    const position = intensity * (HEATMAP_STOPS.length - 1);
-    const index = Math.min(HEATMAP_STOPS.length - 2, Math.floor(position));
-    const fraction = position - index;
-    const rgb = HEATMAP_STOPS[index].map((value, channel) =>
-        Math.round(value + (HEATMAP_STOPS[index + 1][channel] - value) * fraction)
-    );
+    const intensity = max === 1 ? 1 : Math.log(count) / Math.log(max);
+    const rgb = heatmapColor(intensity);
     return {
         backgroundColor: rgbToHex(rgb),
         borderColor: rgbToHex(rgb.map(value => Math.max(0, Math.round(value * 0.72)))),
-        color: intensity >= 0.55 ? '#ffffff' : '#202124'
+        color: foregroundFor(rgb)
     };
 }
 

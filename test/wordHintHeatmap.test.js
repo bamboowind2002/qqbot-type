@@ -55,28 +55,31 @@ test('heatmap counts only C++ up-arrow output as left Shift', () => {
     assert.equal(result.counts.ShiftRight, undefined);
 });
 
-test('heatmap colors use a linear blue gradient with contrast-aware text', () => {
+test('heatmap colors follow the complete continuous Turbo curve', () => {
     assert.deepEqual(getWordHintHeatmapStyle(0, 10), {
         backgroundColor: '#f2f3f5', borderColor: '#d9dce1', color: '#202124'
     });
-    assert.deepEqual(getWordHintHeatmapStyle(1, 1), {
-        backgroundColor: '#08519c', borderColor: '#063a70', color: '#ffffff'
-    });
-    assert.notEqual(getWordHintHeatmapStyle(2, 10).backgroundColor, getWordHintHeatmapStyle(8, 10).backgroundColor);
+    const colors = [1, 9, 25, 49, 81, 100]
+        .map(count => getWordHintHeatmapStyle(count, 100).backgroundColor);
+    assert.equal(new Set(colors).size, colors.length);
 });
 
-test('heatmap square-root mapping keeps a low-frequency key distinct from zero', () => {
+test('heatmap logarithmic mapping starts the lowest positive frequency at Turbo purple', () => {
     const low = getWordHintHeatmapStyle(1, 144);
     const zero = getWordHintHeatmapStyle(0, 144);
     const high = getWordHintHeatmapStyle(144, 144);
 
+    const lowRgb = low.backgroundColor.match(/[\da-f]{2}/gi).map(value => Number.parseInt(value, 16));
+    assert.ok(lowRgb[0] > lowRgb[1]);
+    assert.ok(lowRgb[2] > lowRgb[1]);
     assert.notEqual(low.backgroundColor, zero.backgroundColor);
     assert.notEqual(low.backgroundColor, high.backgroundColor);
 });
 
-test('heatmap switches to white text above the middle of the visual scale', () => {
+test('heatmap chooses text color from the actual background brightness', () => {
     assert.equal(getWordHintHeatmapStyle(2, 10).color, '#202124');
-    assert.equal(getWordHintHeatmapStyle(1, 4).color, '#202124');
+    assert.equal(getWordHintHeatmapStyle(1, 4).color, '#ffffff');
     assert.equal(getWordHintHeatmapStyle(1, 3).color, '#ffffff');
+    assert.equal(getWordHintHeatmapStyle(3, 6).color, '#202124');
     assert.equal(getWordHintHeatmapStyle(8, 10).color, '#ffffff');
 });
