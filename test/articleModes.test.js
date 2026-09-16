@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSegmentArguments, orderedSegment, randomParagraph, randomCharacters } from '../dist/articleModes.js';
+import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from '../dist/articleModes.js';
 
 test('parses remembered length and titles containing spaces', () => {
   assert.deepEqual(parseSegmentArguments(['200', '我的', '文章']), { length: 200, title: '我的 文章' });
@@ -15,4 +15,12 @@ test('supports ordered tail, random paragraphs, and unique random indexes', () =
   const result = randomCharacters(chars, 5, () => 0);
   assert.equal(result.text.length, 5);
   assert.equal(new Set(result.indexes).size, 5);
+});
+
+test('random characters can use an inclusive 1-based range while repeating character values', () => {
+  assert.deepEqual(parseRandomRange(['200', '文章', '1000-5000']), { args: ['200', '文章'], range: { start: 1000, end: 5000 } });
+  const result = randomCharacters([... 'aabc'], 3, () => 0, 0, 4);
+  assert.equal(new Set(result.indexes).size, 3);
+  assert.equal(result.text, 'aab');
+  assert.throws(() => randomCharacters([... 'abcd'], 3, () => 0, 0, 2), /不足/);
 });
