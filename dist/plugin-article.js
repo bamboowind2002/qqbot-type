@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import mysql from 'mysql';
 import compressing from 'compressing';
-import { bot } from './bot.js';
+import { bot, consql } from './bot.js';
 import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
