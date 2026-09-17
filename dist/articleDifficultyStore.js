@@ -1,7 +1,10 @@
 import crypto from 'node:crypto';
+import { DIFFICULTY_RANGES, normalizeDifficulty } from './articleDifficulty.js';
 
-export const ARTICLE_DIFFICULTY_ALGORITHM_VERSION = 'rank-v1';
+export const ARTICLE_DIFFICULTY_ALGORITHM_VERSION = 'rank-v2-summary';
 export const ARTICLE_DIFFICULTY_CANDIDATE_LIMIT = 100;
+export const ARTICLE_DIFFICULTY_COMPOSED_CANDIDATE_LIMIT = 16;
+const ARTICLE_DIFFICULTY_BLOCK_SIZE = 100;
 
 export function mysqlQuery(connection, sql, values = []) {
   return new Promise((resolve, reject) => connection.query(sql, values, (error, rows) => error ? reject(error) : resolve(rows)));
@@ -12,6 +15,18 @@ function isMissingDifficultySchema(error) {
 }
 
 export function randomKey() { return crypto.randomBytes(8); }
+
+export function scoreDifficultySummary(hard, waterDelta) {
+  hard = Number(hard); waterDelta = Number(waterDelta);
+  if (!Number.isFinite(hard) || !Number.isFinite(waterDelta) || waterDelta < 0) return null;
+  return Math.round((hard / (1 + waterDelta)) * 100) / 100;
+}
+
+function difficultyDistance(score, rank) {
+  const [low, high] = DIFFICULTY_RANGES[normalizeDifficulty(rank)];
+  if (score >= low && score < high) return 0;
+  return score < low ? low - score : score - high;
+}
 
 export async function getActiveDifficultyGeneration(connection) {
   try {
@@ -87,6 +102,60 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
      order by r.block_key limit ?`, [generation, rank, blockPivot, blockLimit]);
   const unique = new Map([...articleCandidates, ...blockCandidates].map(row => [`${row.title}:${row.start}`, row]));
   return { backend: 'mysql', generationId: generation, records: [...unique.values()] };
+}
+
+async function sampleComposedRows(connection, generation, rank, blockCount, limit, random) {
+  const pivot = random();
+  const poolLimit = Math.max(500, Math.min(2000, limit * 64));
+  const blockOffset = (blockCount - 1) * ARTICLE_DIFFICULTY_BLOCK_SIZE;
+  const query = comparison => `
+    select s.title, s.start, a.revision,
+           e.hard_prefix - s.hard_prefix + s.hard_score as hard_score,
+           e.water_prefix - s.water_prefix + s.water_delta as water_delta
+      from article_difficulty_records s
+      join article_difficulty_records e
+        on e.generation_id = s.generation_id and e.title = s.title
+       and e.start = s.start + ? and e.length = ?
+      join article_difficulty_articles a
+        on a.generation_id = s.generation_id and a.title = s.title
+     where s.generation_id = ? and s.\`rank\` = ? and s.length = ?
+       and s.block_key ${comparison} ?
+       and e.valid_prefix - s.valid_prefix + 1 = ?
+     order by s.block_key limit ?`;
+  return wrappedQuery(connection, query('>='),
+    [blockOffset, ARTICLE_DIFFICULTY_BLOCK_SIZE, generation, rank, ARTICLE_DIFFICULTY_BLOCK_SIZE, pivot, blockCount, poolLimit],
+    query('<'),
+    [blockOffset, ARTICLE_DIFFICULTY_BLOCK_SIZE, generation, rank, ARTICLE_DIFFICULTY_BLOCK_SIZE, pivot, blockCount, poolLimit]);
+}
+
+export async function sampleDifficultySegments(connection, rank, length, limit = ARTICLE_DIFFICULTY_CANDIDATE_LIMIT, random = randomKey) {
+  if (!Number.isSafeInteger(length) || length < ARTICLE_DIFFICULTY_BLOCK_SIZE * 2) {
+    return sampleDifficultyRecords(connection, rank, limit, random);
+  }
+  const active = await getActiveDifficultyGeneration(connection);
+  if (!active || active.algorithm_version !== ARTICLE_DIFFICULTY_ALGORITHM_VERSION || Number(active.block_size) !== ARTICLE_DIFFICULTY_BLOCK_SIZE) {
+    return sampleDifficultyRecords(connection, rank, limit, random);
+  }
+  const blockCount = Math.floor(length / ARTICLE_DIFFICULTY_BLOCK_SIZE);
+  try {
+    const rows = await sampleComposedRows(connection, active.id, rank, blockCount, limit, random);
+    const records = rows.map(row => ({
+      title: row.title,
+      start: Number(row.start),
+      length,
+      score: scoreDifficultySummary(row.hard_score, row.water_delta),
+      rank,
+      revision: row.revision
+    })).filter(row => Number.isFinite(row.score));
+    records.sort((a, b) => difficultyDistance(a.score, rank) - difficultyDistance(b.score, rank));
+    return {
+      backend: 'mysql-summary', generationId: active.id,
+      records: records.slice(0, Math.min(limit, ARTICLE_DIFFICULTY_COMPOSED_CANDIDATE_LIMIT))
+    };
+  } catch (error) {
+    if (!isMissingDifficultySchema(error)) throw error;
+    return sampleDifficultyRecords(connection, rank, limit, random);
+  }
 }
 
 export async function renameDifficultyRecords(connection, oldTitle, newTitle) {

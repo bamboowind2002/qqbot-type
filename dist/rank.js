@@ -18,9 +18,11 @@ const pre = new Set(readJSON("pre.json").k);
 // 字母与数字
 const letterDigit = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
-export function get_rank(s) {
+export function analyze_rank(s) {
   let score = 0;
   let err = false;
+  let hard = null;
+  let water = null;
 
   try {
     s = s.trim();
@@ -51,7 +53,7 @@ export function get_rank(s) {
 
     s = ns;
     if (s.length === 0) {
-      return [-1, null, null, null];
+      return { score: -1, rankEn: null, rank: null, error: null, hard: null, water: null, waterDelta: null };
     }
 
     const dp = Array(s.length + 1).fill([-1, -1, -1]);
@@ -85,8 +87,8 @@ export function get_rank(s) {
     }
 
     let curPos = s.length;
-    let water = 1;
-    let hard = 0;
+    water = 1;
+    hard = 0;
 
     while (curPos !== 0) {
       const [_, __, prePos] = dp[curPos];
@@ -131,7 +133,17 @@ export function get_rank(s) {
 
   if (score > 100) rk_zh = "爆表";
 
-  return [score, rk_en, rk_zh, err];
+  return {
+    score, rankEn: rk_en, rank: rk_zh, error: err,
+    hard: err ? null : hard,
+    water: err ? null : water,
+    waterDelta: err ? null : water - 1
+  };
+}
+
+export function get_rank(s) {
+  const result = analyze_rank(s);
+  return [result.score, result.rankEn, result.rank, result.error];
 }
 
 // console.log(get_rank("满面泪流"))

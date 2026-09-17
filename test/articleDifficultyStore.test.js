@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getActiveDifficultyGeneration, sampleDifficultyRecords } from '../dist/articleDifficultyStore.js';
+import {
+  ARTICLE_DIFFICULTY_ALGORITHM_VERSION,
+  getActiveDifficultyGeneration,
+  sampleDifficultyRecords,
+  sampleDifficultySegments,
+  scoreDifficultySummary
+} from '../dist/articleDifficultyStore.js';
 
 function fakeConnection(responses, queries = []) {
   return {
@@ -37,4 +43,30 @@ test('mixed sampling wraps both random-key indexes without ORDER BY RAND', async
   assert.equal(queries.filter(item => /article_key\s*</u.test(item.sql)).length, 1);
   assert.equal(queries.filter(item => /block_key\s*</u.test(item.sql)).length, 1);
   assert.equal(queries.filter(item => /order by r\.block_key/u.test(item.sql) && /article_difficulty_articles/u.test(item.sql)).length, 0);
+});
+
+test('scores additive difficulty summaries with one shared water baseline', () => {
+  assert.equal(scoreDifficultySummary(0.4, 1), 0.2);
+  assert.equal(scoreDifficultySummary('bad', 1), null);
+});
+
+test('long segments are shortlisted from composed block summaries', async () => {
+  const queries = [];
+  const connection = fakeConnection([
+    [{ id: 9, algorithm_version: ARTICLE_DIFFICULTY_ALGORITHM_VERSION, block_size: 100, status: 'complete' }],
+    [
+      { title: '偏易', start: 0, revision: 'b', hard_score: 0.9, water_delta: 0 },
+      { title: '正好水', start: 100, revision: 'a', hard_score: 0.4, water_delta: 1 }
+    ],
+    []
+  ], queries);
+  const result = await sampleDifficultySegments(connection, '水', 2000, 10, () => Buffer.alloc(8, 0x80));
+  assert.equal(result.backend, 'mysql-summary');
+  assert.equal(result.records.length, 2);
+  assert.equal(result.records[0].title, '正好水');
+  assert.equal(result.records[0].score, 0.2);
+  assert.equal(queries.length, 3);
+  assert.match(queries[1].sql, /e\.valid_prefix - s\.valid_prefix \+ 1 = \?/u);
+  assert.equal(queries[1].values[0], 1900);
+  assert.equal(queries[1].values.at(-2), 20);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ARTICLE_MAP_BLOCK_SIZE, canReuseDifficultyGeneration, difficultyBlockRanges, filterDifficultyMapRecords, getDifficultyMapStatus } from '../dist/articleMap.js';
+import { ARTICLE_DIFFICULTY_ALGORITHM_VERSION } from '../dist/articleDifficultyStore.js';
 
 test('difficulty map covers every exact 100-character block without caps', () => {
   assert.equal(ARTICLE_MAP_BLOCK_SIZE, 100);
@@ -14,10 +15,10 @@ test('difficulty map covers every exact 100-character block without caps', () =>
 });
 
 test('only matching algorithm and block size can reuse an active generation', () => {
-  const active = { algorithm_version: 'rank-v1', block_size: 100 };
+  const active = { algorithm_version: ARTICLE_DIFFICULTY_ALGORITHM_VERSION, block_size: 100 };
   assert.equal(canReuseDifficultyGeneration(active), true);
   assert.equal(canReuseDifficultyGeneration(active, 'rank-v2'), false);
-  assert.equal(canReuseDifficultyGeneration(active, 'rank-v1', 200), false);
+  assert.equal(canReuseDifficultyGeneration(active, ARTICLE_DIFFICULTY_ALGORITHM_VERSION, 200), false);
 });
 
 test('difficulty maps discard records with null or invalid ranks', () => {

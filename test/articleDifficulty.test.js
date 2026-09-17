@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseDifficultySegment, isValidDifficultyResult, normalizeDifficulty } from '../dist/articleDifficulty.js';
+import { analyze_rank, get_rank } from '../dist/rank.js';
 
 test('selects an exact difficulty candidate before falling back to nearest', () => {
   const articles = [{ title: '甲', text: 'abcdefghij' }, { title: '乙', text: 'klmnopqrst' }];
@@ -34,4 +35,14 @@ test('rejects difficulty results without a valid rank', () => {
   assert.equal(isValidDifficultyResult(0.2, '水', null), true);
   const result = chooseDifficultySegment([{ title: '无效', text: 'x'.repeat(10) }], 10, '淼', () => [-1, null, null, null], () => 0, () => 0);
   assert.equal(result, null);
+});
+
+test('rank analysis preserves the public result and exposes composable contributions', () => {
+  for (const text of ['满面泪流', '一个用于验证难度摘要的普通句子', 'ABC 123']) {
+    const result = analyze_rank(text);
+    assert.deepEqual(get_rank(text), [result.score, result.rankEn, result.rank, result.error]);
+    assert.equal(result.score, Math.round((result.hard / result.water) * 100) / 100);
+    assert.equal(result.waterDelta, result.water - 1);
+  }
+  assert.deepEqual(get_rank('   '), [-1, null, null, null]);
 });

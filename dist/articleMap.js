@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ARTICLE_DIR, listArticles, readArticleViews } from './articleStorage.js';
-import { get_rank } from './rank.js';
+import { analyze_rank } from './rank.js';
 import { isValidDifficultyResult } from './articleDifficulty.js';
 import { sliceCodePoints } from './unicodeText.js';
 import { ARTICLE_DIFFICULTY_ALGORITHM_VERSION, mysqlQuery, randomKey } from './articleDifficultyStore.js';
@@ -80,11 +80,13 @@ export function cancelDifficultyMapSync() {
 
 async function insertRecords(connection, rows) {
   if (!rows.length) return;
-  const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?)').join(',');
+  const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?)').join(',');
   await mysqlQuery(connection, `insert into article_difficulty_records
-    (generation_id, title, start, length, score, \`rank\`, article_key, block_key)
+    (generation_id, title, start, length, score, \`rank\`, article_key, block_key,
+     hard_score, water_delta, hard_prefix, water_prefix, valid_prefix)
     values ${placeholders}`,
-  rows.flatMap(row => [row.generationId, row.title, row.start, row.length, row.score, row.rank, row.articleKey, row.blockKey]));
+  rows.flatMap(row => [row.generationId, row.title, row.start, row.length, row.score, row.rank, row.articleKey, row.blockKey,
+    row.hard, row.waterDelta, row.hardPrefix, row.waterPrefix, row.validPrefix]));
 }
 
 async function insertArticles(connection, rows) {
@@ -123,15 +125,22 @@ async function activeGeneration(connection) {
 async function calculateArticle(connection, generationId, title, view) {
   const ranges = difficultyBlockRanges(view.compactIndex.length);
   const articleKey = randomKey();
-  let valid = 0, invalid = 0, batch = [];
+  let valid = 0, invalid = 0, batch = [], hardPrefix = 0, waterPrefix = 0;
   for (const range of ranges) {
     if (cancelRequested) break;
     try {
       const text = sliceCodePoints(view.compactText, range.start, range.length, view.compactIndex);
-      const [score, , rank, error] = get_rank(text);
-      if (isValidDifficultyResult(score, rank, error)) {
-        batch.push({ generationId, title, ...range, score, rank, articleKey, blockKey: randomKey() });
+      const result = analyze_rank(text);
+      if (isValidDifficultyResult(result.score, result.rank, result.error) &&
+          Number.isFinite(result.hard) && Number.isFinite(result.waterDelta)) {
         valid++;
+        hardPrefix += result.hard;
+        waterPrefix += result.waterDelta;
+        batch.push({
+          generationId, title, ...range, score: result.score, rank: result.rank,
+          articleKey, blockKey: randomKey(), hard: result.hard, waterDelta: result.waterDelta,
+          hardPrefix, waterPrefix, validPrefix: valid
+        });
       } else invalid++;
     } catch (_) { invalid++; }
     if (batch.length >= ARTICLE_MAP_INSERT_BATCH_SIZE) {
@@ -154,8 +163,10 @@ async function copyReusableRecords(connection, sourceGeneration, generationId, t
     await mysqlQuery(connection, `insert ignore into article_difficulty_reuse_titles (title) values ${batch.map(() => '(?)').join(',')}`, batch);
   }
   await mysqlQuery(connection, `insert into article_difficulty_records
-    (generation_id, title, start, length, score, \`rank\`, article_key, block_key)
-    select ?, r.title, r.start, r.length, r.score, r.\`rank\`, r.article_key, r.block_key
+    (generation_id, title, start, length, score, \`rank\`, article_key, block_key,
+     hard_score, water_delta, hard_prefix, water_prefix, valid_prefix)
+    select ?, r.title, r.start, r.length, r.score, r.\`rank\`, r.article_key, r.block_key,
+           r.hard_score, r.water_delta, r.hard_prefix, r.water_prefix, r.valid_prefix
       from article_difficulty_records r join article_difficulty_reuse_titles u on u.title = r.title
      where r.generation_id = ?`, [generationId, sourceGeneration]);
 }
