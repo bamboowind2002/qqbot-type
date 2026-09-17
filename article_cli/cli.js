@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { listArticles } from '../dist/articleStorage.js';
+import { listArticles, readArticleViews } from '../dist/articleStorage.js';
 import { readArticle, searchArticle, clampProgress } from '../dist/articleUser.js';
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from '../dist/articleModes.js';
 import { formatArticleMessage } from '../dist/articleMessage.js';
@@ -55,7 +55,7 @@ export async function runCli({ input = process.stdin, output = process.stdout } 
         state.title = title; if (!state.progress.has(title)) state.progress.set(title, 0); write(`已选择：${title}`); continue;
       }
       if (command === '进' || command === 'progress') {
-        const title = getSelected(), length = [...await readArticle(title)].length, old = state.progress.get(title) || 0;
+        const title = getSelected(), length = (await readArticleViews(title)).compactIndex.length, old = state.progress.get(title) || 0;
         let position = old;
         if (args[0]) {
           const match = args[0].match(/^([+=-])(\d+)$/); if (!match) throw new Error('格式：进、进 +500、进 -500 或 进 =123。');
@@ -65,13 +65,13 @@ export async function runCli({ input = process.stdin, output = process.stdout } 
         write(`${title}：${position}/${length} 字（${length ? (position * 100 / length).toFixed(2) : '100.00'}%）`); continue;
       }
       if (['顺', '随', '乱', 'ordered', 'paragraph', 'random'].includes(command)) {
-        const title = args.find(arg => names().includes(arg)) || getSelected(), body = await readArticle(title), chars = [...body];
+        const title = args.find(arg => names().includes(arg)) || getSelected(), view = await readArticleViews(title), body = view.compactText;
         const titleArgs = args.filter(arg => arg !== title), rangeResult = command === '乱' ? parseRandomRange(titleArgs) : { args: titleArgs, range: null };
         const parsedLength = parseSegmentArguments(rangeResult.args, state.length); state.length = parsedLength.length;
         let segment;
-        if (command === '顺' || command === 'ordered') { const position = state.progress.get(title) || 0; if (position >= chars.length) throw new Error('这篇文章已经发完了。'); segment = orderedSegment(chars, position, parsedLength.length); state.progress.set(title, segment.nextPosition); }
-        else if (command === '随' || command === 'paragraph') segment = randomParagraph(chars, parsedLength.length);
-        else segment = rangeResult.range ? randomCharacters(chars, parsedLength.length, Math.random, rangeResult.range.start - 1, rangeResult.range.end) : randomCharacters(chars, parsedLength.length);
+        if (command === '顺' || command === 'ordered') { const position = state.progress.get(title) || 0; if (position >= view.compactIndex.length) throw new Error('这篇文章已经发完了。'); segment = orderedSegment(body, position, parsedLength.length, view.compactIndex); state.progress.set(title, segment.nextPosition); }
+        else if (command === '随' || command === 'paragraph') segment = randomParagraph(body, parsedLength.length, Math.random, view.compactIndex);
+        else { const chars = [...body]; segment = rangeResult.range ? randomCharacters(chars, parsedLength.length, Math.random, rangeResult.range.start - 1, rangeResult.range.end) : randomCharacters(chars, parsedLength.length); }
         send(segment.text, title); continue;
       }
       if (command === '难' || command === 'difficulty') {

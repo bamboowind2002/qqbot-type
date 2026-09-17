@@ -1,3 +1,5 @@
+import { createCodePointIndex, sliceCodePoints } from './unicodeText.js';
+
 export const DIFFICULTY_RANGES = Object.freeze({
   '淼': [-Infinity, 0.1], '水': [0.1, 0.3], '易': [0.3, 0.8],
   '普': [0.8, 5], '难': [5, 15], '虐': [15, 100], '爆': [100, Infinity], '爆表': [100, Infinity]
@@ -30,7 +32,8 @@ function inRange(score, [low, high]) { return score >= low && score < high; }
 export function chooseDifficultySegment(articles, length, difficulty, getRank, random = Math.random, now = () => Date.now(), hints = [], excluded = new Set()) {
   difficulty = normalizeDifficulty(difficulty);
   if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error('每段字数必须是 10 至 2000 的整数。');
-  const eligible = articles.filter(article => [...article.text].length >= length);
+  const indexedArticles = articles.map(article => ({ ...article, textIndex: createCodePointIndex(article.text) }));
+  const eligible = indexedArticles.filter(article => article.textIndex.length >= length);
   if (!eligible.length) throw new Error(`没有长度达到 ${length} 字的文章。`);
   const range = DIFFICULTY_RANGES[difficulty], deadline = now() + 5000;
   const articleByTitle = new Map(eligible.map(article => [article.title, article]));
@@ -43,13 +46,12 @@ export function chooseDifficultySegment(articles, length, difficulty, getRank, r
   while (attempts < 300 && now() <= deadline) {
     const source = sources[Math.floor(random() * sources.length)];
     const article = source.title ? articleByTitle.get(source.title) : source;
-    const chars = [...article.text];
-    const maxStart = chars.length - length;
+    const maxStart = article.textIndex.length - length;
     const start = source.start == null
       ? Math.floor(random() * (maxStart + 1))
       : Math.max(0, Math.min(maxStart, source.start + Math.floor((random() - 0.5) * 2 * ARTICLE_HINT_MIN_LENGTH)));
     if (excluded.has(`${article.title}:${start}`)) { attempts++; continue; }
-    const text = chars.slice(start, start + length).join(''), [score, , rank, error] = getRank(text);
+    const text = sliceCodePoints(article.text, start, length, article.textIndex), [score, , rank, error] = getRank(text);
     attempts++;
     if (!isValidDifficultyResult(score, rank, error)) continue;
     const candidate = { title: article.title, text, start, score, rank, attempts };

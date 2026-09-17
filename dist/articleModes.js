@@ -1,3 +1,5 @@
+import { countCodePoints, createCodePointIndex, sliceCodePoints } from './unicodeText.js';
+
 export function parseSegmentArguments(args, defaultLength = 100) {
   const values = [...(args || [])];
   let length = defaultLength;
@@ -6,14 +8,21 @@ export function parseSegmentArguments(args, defaultLength = 100) {
   return { length, title: values.join(' ').trim() };
 }
 
-export function orderedSegment(chars, position, length) {
-  return { text: chars.slice(position, position + length).join(''), nextPosition: Math.min(chars.length, position + length) };
+function sourceLength(source, index) { return Array.isArray(source) ? source.length : (index || createCodePointIndex(source)).length; }
+function sourceSlice(source, start, length, index) {
+  return Array.isArray(source) ? source.slice(start, start + length).join('') : sliceCodePoints(source, start, length, index);
 }
 
-export function randomParagraph(chars, length, random = Math.random) {
-  if (chars.length < length) throw new Error(`文章只有 ${chars.length} 字，不足 ${length} 字。`);
-  const start = Math.floor(random() * (chars.length - length + 1));
-  return { text: chars.slice(start, start + length).join(''), start };
+export function orderedSegment(source, position, length, index = null) {
+  const total = sourceLength(source, index);
+  return { text: sourceSlice(source, position, length, index), nextPosition: Math.min(total, position + length) };
+}
+
+export function randomParagraph(source, length, random = Math.random, index = null) {
+  const total = sourceLength(source, index);
+  if (total < length) throw new Error(`文章只有 ${total} 字，不足 ${length} 字。`);
+  const start = Math.floor(random() * (total - length + 1));
+  return { text: sourceSlice(source, start, length, index), start };
 }
 
 export function parseRandomRange(args) {
@@ -42,9 +51,11 @@ export function randomCharacters(chars, length, random = Math.random, rangeStart
   return { text: indexes.slice(0, length).map(index => chars[index]).join(''), indexes: indexes.slice(0, length) };
 }
 
-export function randomLines(lines, length, random = Math.random, rangeStart = 0, rangeEnd = lines.length) {
+export function randomLines(lines, length, random = Math.random, rangeStart = 0, rangeEnd = lines.length, lineLengths = null, linePrefix = null) {
   if (!Number.isInteger(rangeStart) || !Number.isInteger(rangeEnd) || rangeStart < 0 || rangeEnd > lines.length || rangeEnd <= rangeStart) throw new Error('乱序下标范围超出文章行数。');
-  if (lines.slice(rangeStart, rangeEnd).reduce((total, line) => total + [...line].length, 0) < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
+  lineLengths ||= lines.map(countCodePoints);
+  const available = linePrefix ? linePrefix[rangeEnd] - linePrefix[rangeStart] : lineLengths.slice(rangeStart, rangeEnd).reduce((total, value) => total + value, 0);
+  if (available < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
   const indexes = Array.from({ length: rangeEnd - rangeStart }, (_, index) => index + rangeStart);
   const selected = [];
   let total = 0;
@@ -53,7 +64,8 @@ export function randomLines(lines, length, random = Math.random, rangeStart = 0,
     [indexes[selected.length], indexes[offset]] = [indexes[offset], indexes[selected.length]];
     const index = indexes[selected.length];
     selected.push(index);
-    total += [...lines[index]].length;
+    total += lineLengths[index];
   }
-  return { text: [...selected.map(index => lines[index]).join('')].slice(0, length).join(''), indexes: selected };
+  const text = selected.map(index => lines[index]).join('');
+  return { text: sliceCodePoints(text, 0, length), indexes: selected };
 }

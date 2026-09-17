@@ -3,12 +3,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
+import { countCodePoints, createCodePointIndex } from './unicodeText.js';
 
 export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 
 export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
 
 const articleViewCache = new Map();
+const ARTICLE_VIEW_CACHE_MAX_BYTES = 64 * 1024 ** 2;
+let articleViewCacheBytes = 0;
 
 const ENCODINGS = new Map([
   ['utf8', 'utf-8'], ['utf-8', 'utf-8'], ['utf16le', 'utf-16le'],
@@ -89,20 +92,55 @@ export function splitArticleLines(text) {
 }
 
 function articleView(text) {
-  return { text, lines: splitArticleLines(text), compactText: compactArticleText(text) };
+  const lines = splitArticleLines(text);
+  const lineLengths = lines.map(countCodePoints);
+  const linePrefix = [0];
+  for (const length of lineLengths) linePrefix.push(linePrefix.at(-1) + length);
+  const compactText = compactArticleText(text);
+  const compactIndex = createCodePointIndex(compactText);
+  const textRevision = crypto.createHash('sha256').update(text).digest('hex');
+  const compactRevision = crypto.createHash('sha256').update(compactText).digest('hex');
+  return { text, textRevision, lines, lineLengths, linePrefix, compactText, compactIndex, compactRevision };
+}
+
+function estimateArticleViewBytes(view) {
+  return (view.text.length + view.compactText.length) * 2 + view.lines.length * 64 +
+    view.lineLengths.length * 8 + view.linePrefix.length * 8 + view.compactIndex.offsets.length * 8;
+}
+
+function cacheArticleView(title, value) {
+  const previous = articleViewCache.get(title);
+  if (previous) articleViewCacheBytes -= previous.bytes;
+  articleViewCache.delete(title);
+  articleViewCache.set(title, value);
+  articleViewCacheBytes += value.bytes;
+  while (articleViewCacheBytes > ARTICLE_VIEW_CACHE_MAX_BYTES && articleViewCache.size > 1) {
+    const oldestTitle = articleViewCache.keys().next().value;
+    const oldest = articleViewCache.get(oldestTitle);
+    articleViewCache.delete(oldestTitle);
+    articleViewCacheBytes -= oldest.bytes;
+  }
 }
 
 export async function readArticleViews(title) {
   const file = articlePath(title);
   const stat = await fsp.stat(file);
   const cached = articleViewCache.get(title);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.view;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    articleViewCache.delete(title);
+    articleViewCache.set(title, cached);
+    return cached.view;
+  }
   const view = articleView(await fsp.readFile(file, 'utf8').then(buffer => normalizeArticleText(Buffer.from(buffer), 'utf-8')));
-  articleViewCache.set(title, { mtimeMs: stat.mtimeMs, size: stat.size, view });
+  cacheArticleView(title, { mtimeMs: stat.mtimeMs, size: stat.size, view, bytes: estimateArticleViewBytes(view) });
   return view;
 }
 
-export function invalidateArticleView(title) { articleViewCache.delete(String(title)); }
+export function invalidateArticleView(title) {
+  const key = String(title), cached = articleViewCache.get(key);
+  if (cached) articleViewCacheBytes -= cached.bytes;
+  articleViewCache.delete(key);
+}
 
 function diskFreeBytes(directory) {
   try { return Number(fs.statfsSync(directory).bavail) * Number(fs.statfsSync(directory).bsize); }
@@ -145,11 +183,11 @@ export async function replaceArticleRange(title, start, end, pattern, replacemen
   let regex; try { regex = new RegExp(pattern, 'gu'); } catch (err) { throw new Error(`正则表达式无效：${err.message}`); }
   const selected = chars.slice(start - 1, end).join('').replace(regex, replacement ?? '');
   const compactPositions = [];
-  for (let index = 0, compact = 0; index < [...text].length; index++) {
-    const char = [...text][index];
+  const rawChars = [...text];
+  for (let index = 0, compact = 0; index < rawChars.length; index++) {
+    const char = rawChars[index];
     if (char !== '\n') { compactPositions[compact] = index; compact++; }
   }
-  const rawChars = [...text];
   const rawStart = compactPositions[start - 1];
   const rawEnd = compactPositions[end - 1] + 1;
   rawChars.splice(rawStart, rawEnd - rawStart, ...[...selected]);

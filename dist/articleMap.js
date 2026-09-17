@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { ARTICLE_DIR, listArticles } from './articleStorage.js';
-import { readArticle } from './articleUser.js';
+import { ARTICLE_DIR, listArticles, readArticleViews } from './articleStorage.js';
 import { get_rank } from './rank.js';
 import { isValidDifficultyResult } from './articleDifficulty.js';
+import { sliceCodePoints } from './unicodeText.js';
 
 export const ARTICLE_MAP_PATH = path.join(ARTICLE_DIR, 'difficulty-map.json');
 export const ARTICLE_MAP_BLOCK_SIZE = 100;
@@ -87,17 +87,17 @@ export async function syncDifficultyMap(onProgress = () => {}) {
     const records = [];
     for (const title of titles) {
       if (cancelRequested) return { cancelled: true, ...getDifficultyMapStatus() };
-      const body = await readArticle(title), revision = hash(body), chars = [...body];
+      const view = await readArticleViews(title), body = view.compactText, revision = view.compactRevision, articleLength = view.compactIndex.length;
       const old = oldByTitle.get(title);
       if (old?.length && old[0].revision === revision) records.push(...old);
       else {
-        const random = seededRandom(revision), starts = sampleStarts(chars.length);
+        const random = seededRandom(revision), starts = sampleStarts(articleLength);
         for (const start of starts) {
-          const maxStart = Math.max(0, chars.length - ARTICLE_MAP_BLOCK_SIZE);
+          const maxStart = Math.max(0, articleLength - ARTICLE_MAP_BLOCK_SIZE);
           const actualStart = Math.min(maxStart, start + Math.floor(random() * Math.min(ARTICLE_MAP_BLOCK_SIZE, Math.max(1, maxStart - start + 1))));
-          const text = chars.slice(actualStart, actualStart + ARTICLE_MAP_BLOCK_SIZE).join('');
+          const text = sliceCodePoints(body, actualStart, ARTICLE_MAP_BLOCK_SIZE, view.compactIndex);
           const [score, , rank, error] = get_rank(text);
-          if (text.length && isValidDifficultyResult(score, rank, error)) records.push({ title, revision, start: actualStart, length: [...text].length, score, rank });
+          if (text.length && isValidDifficultyResult(score, rank, error)) records.push({ title, revision, start: actualStart, length: Math.min(ARTICLE_MAP_BLOCK_SIZE, articleLength - actualStart), score, rank });
         }
         task.changed++;
       }
