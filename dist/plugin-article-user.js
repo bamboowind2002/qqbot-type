@@ -81,7 +81,10 @@ async function articleMode(e, mode, args) {
     const end = randomArgs.range ? randomArgs.range.end : view.lines.length;
     segment = randomLines(view.lines, parsed.length, Math.random, start, end);
   }
-  const output = formatArticleMessage(segment.text, { title, trigger: triggerName(e) });
+  const displayTitle = mode === 'characters'
+    ? `${title}（乱序${randomArgs.range ? `第${randomArgs.range.start}-${randomArgs.range.end}行` : '全文'}）`
+    : title;
+  const output = formatArticleMessage(segment.text, { title: displayTitle, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   await saveLastArticleConfig(consql, userId(e), { mode, length: parsed.length, title, condition, ...(randomArgs.range ? { rangeStart: randomArgs.range.start, rangeEnd: randomArgs.range.end } : {}) });
   openArticleSession(sessionKey(e), { title, mode, length: parsed.length, rangeStart: randomArgs.range?.start ?? null, rangeEnd: randomArgs.range?.end ?? null, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, lastMessage: output });
