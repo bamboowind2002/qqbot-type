@@ -4,6 +4,7 @@ import { DIFFICULTY_RANGES, normalizeDifficulty } from './articleDifficulty.js';
 export const ARTICLE_DIFFICULTY_ALGORITHM_VERSION = 'rank-v2-summary';
 export const ARTICLE_DIFFICULTY_CANDIDATE_LIMIT = 100;
 export const ARTICLE_DIFFICULTY_COMPOSED_CANDIDATE_LIMIT = 16;
+export const ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT = 128;
 const ARTICLE_DIFFICULTY_BLOCK_SIZE = 100;
 
 export function mysqlQuery(connection, sql, values = []) {
@@ -104,9 +105,12 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
   return { backend: 'mysql', generationId: generation, records: [...unique.values()] };
 }
 
-async function sampleComposedRows(connection, generation, rank, blockCount, limit, random) {
+async function sampleComposedRows(connection, generation, rank, blockCount, random) {
   const pivot = random();
-  const poolLimit = Math.max(500, Math.min(2000, limit * 64));
+  // The composed query performs a primary-key lookup for the ending block of
+  // every sampled start. A large pool turns cold InnoDB pages into seconds of
+  // random I/O, while only a small shortlist is ever verified by the caller.
+  const poolLimit = ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT;
   const blockOffset = (blockCount - 1) * ARTICLE_DIFFICULTY_BLOCK_SIZE;
   const query = comparison => `
     select s.title, s.start, a.revision,
@@ -138,7 +142,7 @@ export async function sampleDifficultySegments(connection, rank, length, limit =
   }
   const blockCount = Math.floor(length / ARTICLE_DIFFICULTY_BLOCK_SIZE);
   try {
-    const rows = await sampleComposedRows(connection, active.id, rank, blockCount, limit, random);
+    const rows = await sampleComposedRows(connection, active.id, rank, blockCount, random);
     const records = rows.map(row => ({
       title: row.title,
       start: Number(row.start),

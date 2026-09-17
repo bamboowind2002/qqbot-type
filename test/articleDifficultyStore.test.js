@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ARTICLE_DIFFICULTY_ALGORITHM_VERSION,
+  ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT,
   getActiveDifficultyGeneration,
   sampleDifficultyRecords,
   sampleDifficultySegments,
@@ -69,4 +70,5 @@ test('long segments are shortlisted from composed block summaries', async () => 
   assert.match(queries[1].sql, /e\.valid_prefix - s\.valid_prefix \+ 1 = \?/u);
   assert.equal(queries[1].values[0], 1900);
   assert.equal(queries[1].values.at(-2), 20);
+  assert.equal(queries[1].values.at(-1), ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT);
 });
