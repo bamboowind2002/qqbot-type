@@ -146,11 +146,12 @@ async function calculateArticle(connection, generationId, title, view) {
 }
 
 async function copyReusableRecords(connection, sourceGeneration, generationId, titles) {
+  titles = [...new Set(titles)];
   if (!titles.length) return;
   await mysqlQuery(connection, 'create temporary table article_difficulty_reuse_titles (title varchar(255) not null primary key) engine=InnoDB');
   for (let index = 0; index < titles.length; index += ARTICLE_MAP_INSERT_BATCH_SIZE) {
     const batch = titles.slice(index, index + ARTICLE_MAP_INSERT_BATCH_SIZE);
-    await mysqlQuery(connection, `insert into article_difficulty_reuse_titles (title) values ${batch.map(() => '(?)').join(',')}`, batch);
+    await mysqlQuery(connection, `insert ignore into article_difficulty_reuse_titles (title) values ${batch.map(() => '(?)').join(',')}`, batch);
   }
   await mysqlQuery(connection, `insert into article_difficulty_records
     (generation_id, title, start, length, score, \`rank\`, article_key, block_key)
@@ -184,7 +185,7 @@ async function cleanupGenerations(connection) {
 export async function syncDifficultyMap(connection, onProgress = () => {}) {
   if (task) throw new Error('难度地图正在同步中。');
   if (!connection) throw new Error('同步难度地图需要 MySQL 连接。');
-  const titles = listArticles();
+  const titles = [...new Set(listArticles())];
   const generationId = await createGeneration(connection, titles.length);
   task = { generationId, processed: 0, total: titles.length, changed: 0, records: 0, totalBlocks: 0, invalid: 0, startedAt: Date.now() };
   cancelRequested = false;
