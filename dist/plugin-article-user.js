@@ -201,7 +201,12 @@ async function handleSessionCommand(e, command) {
     return send(e, conditionText ? `自动续段条件已设置：${conditionText}` : '已恢复无条件自动续段。');
   }
   if (command.action === '下' || command.action === '下一段') {
-    if (!session) throw new Error('当前没有发文会话。');
+    if (!session) {
+      await repeatLast(e);
+      const restored = getArticleSession(key);
+      if (!restored) throw new Error('无法恢复发文会话。');
+      return continueSession(e, restored, true);
+    }
     return continueSession(e, session, true);
   }
   if (command.action === '上' || command.action === '上一段') {
