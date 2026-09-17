@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clampProgress, searchArticle } from '../dist/articleUser.js';
+import { clampProgress, searchArticle, saveLastArticleConfig } from '../dist/articleUser.js';
 
 test('clamps article progress to the valid Unicode range', () => {
   assert.equal(clampProgress(-3, 10), 0);
@@ -14,4 +14,8 @@ test('searches by Unicode characters and paginates with context', () => {
   assert.equal(result.page, 2);
   assert.equal(result.items[0].position, 5);
   assert.match(result.items[0].context, /甲😀乙/);
+});
+
+test('validates persisted last article modes', async () => {
+  assert.rejects(() => saveLastArticleConfig({ query() {} }, '1', { mode: 'invalid', length: 100 }), /无效/);
 });

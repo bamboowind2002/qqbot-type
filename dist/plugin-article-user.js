@@ -1,7 +1,7 @@
 import { bot, consql } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { parseArticleCommand, extractDirectArticleText } from './articleCommands.js';
-import { getArticleSettings, selectArticle, setSegmentLength, getProgress, setProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
+import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, setProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
@@ -76,7 +76,8 @@ async function articleMode(e, mode, args) {
   else segment = randomCharacters(chars, parsed.length);
   const output = formatArticleMessage(segment.text, { title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
-  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body });
+  await saveLastArticleConfig(consql, userId(e), { mode, length: parsed.length, title, condition, ...(randomArgs.range ? { rangeStart: randomArgs.range.start, rangeEnd: randomArgs.range.end } : {}) });
+  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, lastMessage: output });
   return send(e, output);
 }
 
@@ -119,7 +120,7 @@ async function findDifficultySegment(titles, length, difficulty, mapRecords, exc
   return best;
 }
 
-async function difficultyMode(e, difficulty, args) {
+async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const settings = await getArticleSettings(consql, userId(e));
   const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
   const titles = listArticles(), map = await readDifficultyMap();
@@ -137,15 +138,35 @@ async function difficultyMode(e, difficulty, args) {
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   const recentSegments = [...recent, { title: result.title, start: result.start }].slice(-20);
-  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalized, length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: () => true, conditionText: '', body: result.text, recentSegments });
+  const condition = String(persistedCondition || '').trim();
+  await saveLastArticleConfig(consql, userId(e), { mode: 'difficulty', length: parsed.length, difficulty: normalized, condition });
+  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalized, length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: result.text, recentSegments, lastMessage: output });
   return send(e, output);
+}
+
+async function repeatLast(e) {
+  const key = sessionKey(e), session = getArticleSession(key);
+  if (session?.lastMessage) { touchArticleSession(session); return send(e, session.lastMessage); }
+  const settings = await getArticleSettings(consql, userId(e));
+  let mode = settings.last_mode, title = settings.last_title || settings.current_title;
+  if (!mode && title) mode = 'ordered';
+  if (!mode) throw new Error('尚未找到上一次发文配置，请先发送一次发文命令。');
+  const length = String(settings.segment_length || 100);
+  if (mode === 'difficulty') return difficultyMode(e, settings.last_difficulty, [length], settings.last_condition || '');
+  if (!title) throw new Error('上一次发文没有可用的文章标题。');
+  const args = [length, title];
+  if (mode === 'characters' && settings.last_range_start != null && settings.last_range_end != null) args.push(`${settings.last_range_start}-${settings.last_range_end}`);
+  if (settings.last_condition) args.push('|', settings.last_condition);
+  return articleMode(e, mode, args);
 }
 
 async function continueSession(e, session, force = false) {
   touchArticleSession(session);
   if (session.mode === 'ordered') await setProgress(consql, userId(e), session.title, session.nextPosition);
-  if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)]);
-  return articleMode(e, session.mode, [String(session.length), session.title]);
+  if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)], session.conditionText);
+  const args = [String(session.length), session.title];
+  if (session.conditionText) args.push('|', session.conditionText);
+  return articleMode(e, session.mode, args);
 }
 
 async function handleSessionCommand(e, command) {
@@ -155,6 +176,7 @@ async function handleSessionCommand(e, command) {
     if (!session) throw new Error('当前没有发文会话。');
     const conditionText = (command.args || []).join(' ').trim();
     session.condition = compileScoreCondition(conditionText); session.conditionText = conditionText; touchArticleSession(session);
+    await saveLastArticleCondition(consql, userId(e), conditionText);
     return send(e, conditionText ? `自动续段条件已设置：${conditionText}` : '已恢复无条件自动续段。');
   }
   if (command.action === '下' || command.action === '下一段') {
@@ -182,6 +204,7 @@ bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
+    if (command.action === '发') return repeatLast(e);
     if (command.action === 'list') return list(e, command);
     if (command.action === '选' || command.action === '选择文章') {
       if (!command.args?.length) throw new Error('格式：》选 <文章标题>');

@@ -6,8 +6,24 @@ function query(connection, sql, values = []) {
 }
 
 export async function getArticleSettings(connection, qqid) {
-  const rows = await query(connection, 'select current_title, segment_length from article_user_settings where qqid = ?', [String(qqid)]);
-  return rows[0] || { current_title: null, segment_length: 100 };
+  const rows = await query(connection, 'select current_title, segment_length, last_mode, last_title, last_difficulty, last_range_start, last_range_end, last_condition from article_user_settings where qqid = ?', [String(qqid)]);
+  return rows[0] || { current_title: null, segment_length: 100, last_mode: null, last_title: null, last_difficulty: null, last_range_start: null, last_range_end: null, last_condition: null };
+}
+
+export async function saveLastArticleConfig(connection, qqid, config) {
+  const mode = String(config.mode || '');
+  if (!['ordered', 'paragraph', 'characters', 'difficulty'].includes(mode)) throw new Error('无效的上次发文模式。');
+  await query(connection, `insert into article_user_settings
+    (qqid, segment_length, last_mode, last_title, last_difficulty, last_range_start, last_range_end, last_condition)
+    values (?, ?, ?, ?, ?, ?, ?, ?)
+    on duplicate key update segment_length = values(segment_length), last_mode = values(last_mode), last_title = values(last_title), last_difficulty = values(last_difficulty), last_range_start = values(last_range_start), last_range_end = values(last_range_end), last_condition = values(last_condition)`, [
+    String(qqid), config.length, mode, config.title ?? null, config.difficulty ?? null,
+    config.rangeStart ?? null, config.rangeEnd ?? null, config.condition ?? null
+  ]);
+}
+
+export async function saveLastArticleCondition(connection, qqid, condition) {
+  await query(connection, 'update article_user_settings set last_condition = ? where qqid = ?', [condition || null, String(qqid)]);
 }
 
 export async function selectArticle(connection, qqid, title) {

@@ -23,6 +23,7 @@ test('parses short and long list commands and preserves direct text only', () =>
   assert.equal(extractDirectArticleText([{ type: 'reply' }, { type: 'text', data: { text: '》文' } }]), '》文');
   assert.deepEqual(parseArticleCommand('》文 分类 古典 3'), { action: 'list', keyword: '', page: 3, category: '古典' });
   assert.deepEqual(parseArticleCommand('》管 分类 添加 古典 文章'), { action: 'category-add', args: ['古典', '文章'] });
+  assert.deepEqual(parseArticleCommand('》发'), { action: '发', args: [], difficulty: false });
 });
 
 test('formats a three-line article message with Unicode character count', () => {
