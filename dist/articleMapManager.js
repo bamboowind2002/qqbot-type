@@ -19,7 +19,7 @@ export function startDifficultyMapTask() {
   if (active) throw new Error('难度地图正在同步中。');
   const child = fork(workerPath, { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   active = child;
-  status = { running: true, processed: 0, total: 0, changed: 0, records: 0, cancelRequested: false };
+  status = { backend: 'mysql', running: true, processed: 0, total: 0, changed: 0, records: 0, totalBlocks: 0, invalid: 0, cancelRequested: false };
   return new Promise((resolve, reject) => {
     const finish = (callback, value) => {
       if (active !== child) return;

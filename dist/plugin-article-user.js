@@ -9,6 +9,7 @@ import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveO
 import { DIFFICULTY_RANGES, isDifficultyMatch, isValidDifficultyResult, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
+import { sampleDifficultyRecords } from './articleDifficultyStore.js';
 import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
 import { listArticles, readArticleViews } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
@@ -138,9 +139,10 @@ async function findDifficultySegment(titles, length, difficulty, mapRecords, exc
     return view;
   };
   const distance = score => score >= range[0] && score < range[1] ? 0 : score < range[0] ? range[0] - score : score - range[1];
-  const evaluate = async (title, start) => {
+  const evaluate = async (title, start, source = null) => {
     if (!titleSet.has(title) || excluded.has(`${title}:${start}`)) return null;
     const view = await getView(title);
+    if (source?.revision && source.revision !== view.compactRevision) return null;
     const body = view.compactText, articleLength = view.compactIndex.length;
     const actualStart = Math.max(0, Math.min(articleLength - length, start));
     if (actualStart < 0 || actualStart + length > articleLength || excluded.has(`${title}:${actualStart}`)) return null;
@@ -154,7 +156,7 @@ async function findDifficultySegment(titles, length, difficulty, mapRecords, exc
     .sort(() => Math.random() - 0.5);
   let best = null;
   for (const source of sources) {
-    const candidate = await evaluate(source.title, source.start);
+    const candidate = await evaluate(source.title, source.start, source);
     if (!candidate) continue;
     if (!best || distance(candidate.score) < distance(best.score)) best = candidate;
     if (isDifficultyMatch(candidate.score, difficulty)) return candidate;
@@ -176,14 +178,16 @@ async function findDifficultySegment(titles, length, difficulty, mapRecords, exc
 async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const settings = await getArticleSettings(consql, userId(e));
   const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
-  const titles = listArticles(), map = await readDifficultyMap();
+  const titles = listArticles();
   const previous = getArticleSession(sessionKey(e));
   const normalized = normalizeDifficulty(difficulty);
+  const databaseCandidates = await sampleDifficultyRecords(consql, normalized === '爆' ? '爆表' : normalized);
+  const mapRecords = databaseCandidates ? databaseCandidates.records : (await readDifficultyMap()).records || [];
   const sameMode = previous?.mode === 'difficulty' && previous.length === parsed.length && previous.difficulty === normalized;
   const recent = sameMode ? (previous.recentSegments || []) : [];
   let excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
-  let result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded);
-  if (!result && excluded.size) { excluded = new Set(); result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded); }
+  let result = await findDifficultySegment(titles, parsed.length, normalized, mapRecords, excluded);
+  if (!result && excluded.size) { excluded = new Set(); result = await findDifficultySegment(titles, parsed.length, normalized, mapRecords, excluded); }
   if (!result) throw new Error('没有找到可用段落。');
   const revision = result.revision;
   candidateCachePut({ length: parsed.length, difficulty, title: result.title, revision, start: result.start, score: result.score });
