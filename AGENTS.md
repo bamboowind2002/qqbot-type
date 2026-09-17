@@ -11,6 +11,7 @@
 - 远端使用专用 GitHub SSH 部署密钥；不要输出私钥或修改该密钥。GitHub remote 已配置为 SSH。
 - 部署涉及真实 NapCat、MySQL 和 QQ 消息。代码或 `.env` 更新后，只有在用户明确授权部署时才运行：`pm2 startOrReload ecosystem.config.cjs --update-env && pm2 save`。若 `package-lock.json` 有变化，先在远端运行 `npm ci --ignore-scripts`；若 `binding.gyp`、`word_hint0206_4.cc` 或 `word_hint0206/` 有变化，另行重新构建原生模块。
 - 启动机器人会连接真实 NapCat、读取/写入真实 MySQL，并可能向 QQ 发送消息。未经用户明确要求，不要运行 `npm run dev`、`npm start` 或启动 PM2；优先做局部、无外部副作用的验证。
+- SnowLuma 的按日日志位于远端 `/home/ubuntu/snowluma/logs/snowluma-YYYY-MM-DD.log`，可用于核对真实 QQ/OneBot 收发延迟。远端未安装 `rg`，应先用窄条件定位，例如 `log=~/snowluma/logs/snowluma-$(date +%F).log; grep -nFa -- "-水 100" "$log" | tail`，再按所得行号用 `sed -n '<起始>,<结束>p' "$log"` 查看最小必要上下文。`[Event]` 是 SnowLuma 收到 QQ 事件，`[Bridge.Action] .handle_quick_operation` 是机器人提交快捷回复，随后 `send_private_msg`/`send_group_msg` 和 `[OneBot] ... | 发送` 表示 SnowLuma 向 QQ 发出消息；用这些时间点区分 QQ 入站、机器人处理和出站阶段。日志时间只精确到秒，不能据此推断毫秒级耗时。日志包含真实 QQ 号、群号和消息正文，排障时只筛选用户指定命令，不批量输出或在回复中复述无关内容；不要读取消息数据库，也不要打印 `snowluma/config/onebot_*.json` 等可能含凭据的配置。
 
 ## 运行入口与词提主链路
 
