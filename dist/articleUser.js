@@ -41,14 +41,33 @@ export async function setSegmentLength(connection, qqid, length) {
 }
 
 export async function getProgress(connection, qqid, title) {
-  const rows = await query(connection, 'select position from article_progress where qqid = ? and title = ?', [String(qqid), title]);
-  return Number(rows[0]?.position || 0);
+  return (await getProgressState(connection, qqid, title)).position;
+}
+
+export async function getProgressState(connection, qqid, title) {
+  const rows = await query(connection, 'select position, last_start, last_end, last_length from article_progress where qqid = ? and title = ?', [String(qqid), title]);
+  const row = rows[0];
+  return {
+    position: Number(row?.position || 0),
+    lastStart: row?.last_start == null ? null : Number(row.last_start),
+    lastEnd: row?.last_end == null ? null : Number(row.last_end),
+    lastLength: row?.last_length == null ? null : Number(row.last_length)
+  };
 }
 
 export async function setProgress(connection, qqid, title, position) {
-  await query(connection, `insert into article_progress (qqid, title, position) values (?, ?, ?)
-    on duplicate key update position = values(position)`, [String(qqid), title, position]);
+  await query(connection, `insert into article_progress (qqid, title, position, last_start, last_end, last_length)
+    values (?, ?, ?, null, null, null)
+    on duplicate key update position = values(position), last_start = null, last_end = null, last_length = null`, [String(qqid), title, position]);
   return position;
+}
+
+export async function saveOrderedProgress(connection, qqid, title, start, end, length) {
+  await query(connection, `insert into article_progress (qqid, title, position, last_start, last_end, last_length)
+    values (?, ?, ?, ?, ?, ?)
+    on duplicate key update position = values(position), last_start = values(last_start), last_end = values(last_end), last_length = values(last_length)`,
+  [String(qqid), title, end, start, end, length]);
+  return { position: end, lastStart: start, lastEnd: end, lastLength: length };
 }
 
 // Character-indexed features use the compact view so line-break edits never

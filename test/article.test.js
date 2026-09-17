@@ -42,5 +42,5 @@ test('formats a three-line article message with Unicode character count', () => 
 });
 
 test('includes the main user-facing article commands in built-in help', () => {
-  for (const command of ['-文', '-选', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
+  for (const command of ['-文', '-选', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-上', '-下', '-发', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
 });
