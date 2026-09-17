@@ -23,7 +23,7 @@ export function parseArticleCommand(raw) {
       const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list' };
       return { action: categoryMap[sub] || 'category-help', args: rest };
     }
-    const map = { '传': 'upload', '上传': 'upload', '改': 'replace', '替换': 'replace', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete', '索': 'map-sync', '同步难度地图': 'map-sync', '状': 'map-status', '难度地图状态': 'map-status', '取消': 'map-cancel', '取消建图': 'map-cancel' };
+    const map = { '传': 'upload', '上传': 'upload', '批传': 'batch-upload', '批量传': 'batch-upload', '批量上传': 'batch-upload', '改': 'replace', '替换': 'replace', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete', '索': 'map-sync', '同步难度地图': 'map-sync', '状': 'map-status', '难度地图状态': 'map-status', '取消': 'map-cancel', '取消建图': 'map-cancel' };
     return { action: map[op] || 'admin-help', args: rest };
   }
   const difficultyAliases = new Set(['淼', '水', '易', '普', '难', '虐', '爆', '难度发文']);
@@ -53,7 +53,8 @@ export const ARTICLE_HELP = `发文命令
 成绩条件示例：速度>=100 且 错字=0；(速度>=100 或 击键>=5) 且 键准>=95%
 
 管理员命令
--管 传 <标题>：上传或更新 txt 文章
+-管 传 <分类> <标题>：上传或更新 txt 文章并加入分类
+-管 批量传 <分类>：上传 zip 压缩包中的全部 txt 文章并加入分类
 -管 改 <起点> <终点> <标题>：下一行填写正则，第三行起填写替换文本
 -管 删 <标题>：请求删除文章
 -管 确认 <确认码>：确认删除

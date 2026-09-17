@@ -1,16 +1,23 @@
 import { randomInt } from 'node:crypto';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import compressing from 'compressing';
 import { bot } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle } from './articleStorage.js';
+import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
 import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
 import { addArticleCategory, removeArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
 
 const deleteTokens = new Map();
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
+const MAX_ARCHIVE_BYTES = 512 * 1024 ** 2;
+const MAX_ARCHIVE_FILES = 20_000;
+const MAX_ARCHIVE_TEXT_BYTES = 2 * 1024 ** 3;
 function fileSegment(message) { return message?.find(x => x?.type === 'file') || null; }
 
-async function findUploadFile(e) {
+async function findUploadFile(e, extension) {
   let file = fileSegment(e.message);
   if (!file) {
     const reply = e.message?.find(x => x?.type === 'reply');
@@ -18,10 +25,58 @@ async function findUploadFile(e) {
   }
   if (!file) throw new Error('请在消息中附加 txt 文件，或引用包含 txt 文件的消息。');
   const filename = String(file.data?.file || '');
-  if (!filename.toLowerCase().endsWith('.txt')) throw new Error('文章文件必须是 .txt。');
+  if (!filename.toLowerCase().endsWith(extension)) throw new Error(`上传文件必须是 ${extension}。`);
   const info = await bot.get_file({ file_id: file.data?.file_id });
   if (!info?.base64) throw new Error('无法下载文章文件。');
-  return Buffer.from(info.base64, 'base64');
+  const buffer = Buffer.from(info.base64, 'base64');
+  if (buffer.length > MAX_ARCHIVE_BYTES) throw new Error('上传文件不能超过 512 MiB。');
+  return { filename, buffer };
+}
+
+async function walkFiles(directory) {
+  const result = [];
+  async function visit(current) {
+    for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) await visit(target);
+      else if (entry.isFile()) result.push(target);
+      else throw new Error('压缩包中不允许包含软链接或特殊文件。');
+    }
+  }
+  await visit(directory);
+  return result;
+}
+
+async function batchUpload(category, archive) {
+  const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'qqbot-article-'));
+  try {
+    await compressing.zip.uncompress(archive.buffer, temporary);
+    const files = await walkFiles(temporary);
+    if (files.length > MAX_ARCHIVE_FILES) throw new Error(`压缩包内文件不能超过 ${MAX_ARCHIVE_FILES} 个。`);
+    const entries = [];
+    const titles = new Set();
+    let totalBytes = 0;
+    for (const file of files) {
+      if (!file.toLowerCase().endsWith('.txt')) throw new Error(`压缩包中包含非 txt 文件：${path.relative(temporary, file)}`);
+      const title = validateArticleTitle(path.basename(file, path.extname(file)));
+      if (titles.has(title)) throw new Error(`压缩包中存在重复文章标题：“${title}”。`);
+      titles.add(title);
+      const stat = await fsp.stat(file);
+      totalBytes += stat.size;
+      if (totalBytes > MAX_ARCHIVE_TEXT_BYTES) throw new Error('压缩包解压后的正文总大小不能超过 2 GiB。');
+      const buffer = await fsp.readFile(file);
+      normalizeArticleText(buffer);
+      entries.push({ title, buffer });
+    }
+    if (!entries.length) throw new Error('压缩包中没有 txt 文件。');
+    const results = [];
+    for (const entry of entries) {
+      const result = await saveArticle(entry.title, entry.buffer);
+      await addArticleCategory(category, entry.title);
+      results.push(result);
+    }
+    return results;
+  } finally { await fsp.rm(temporary, { recursive: true, force: true }).catch(() => {}); }
 }
 
 async function handleAdmin(e, command) {
@@ -53,9 +108,17 @@ async function handleAdmin(e, command) {
     return send(e, result.cancelled ? '难度地图同步已取消，已提交的旧地图保持不变。' : `难度地图同步完成，共 ${result.records.length} 条记录，变更 ${result.changed} 篇文章。`);
   }
   if (command.action === 'upload') {
-    if (!args.length) throw new Error('格式：-管 传 <文章标题>');
-    const result = await saveArticle(validateArticleTitle(args.join(' ')), await findUploadFile(e));
-    return send(e, `文章“${result.title}”上传成功，共 ${result.chars} 字，${result.bytes} 字节。`);
+    if (args.length < 2) throw new Error('格式：-管 传 <分类> <文章标题>');
+    const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
+    const result = await saveArticle(title, (await findUploadFile(e, '.txt')).buffer);
+    await addArticleCategory(category, title);
+    return send(e, `文章“${result.title}”上传成功，共 ${result.chars} 字，已加入分类“${category}”。`);
+  }
+  if (command.action === 'batch-upload') {
+    if (args.length !== 1) throw new Error('格式：-管 批量传 <分类>，请附加 zip 压缩包。');
+    const category = validateCategoryName(args[0]);
+    const results = await batchUpload(category, await findUploadFile(e, '.zip'));
+    return send(e, `批量上传成功：${results.length} 篇文章，已全部加入分类“${category}”。`);
   }
   if (command.action === 'replace') {
     if (args.length < 3) throw new Error('格式：-管 改 <起点> <终点> <文章标题>，下一行填写正则表达式。');
@@ -83,6 +146,6 @@ bot.on('message', async e => {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
     if (command.action === 'help') return send(e, ARTICLE_HELP);
-    if (['upload', 'replace', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove'].includes(command.action)) return handleAdmin(e, command);
+    if (['upload', 'batch-upload', 'replace', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove'].includes(command.action)) return handleAdmin(e, command);
   } catch (err) { if (isArticleAdmin(e.sender?.user_id)) send(e, `发文管理失败：${err.message}`); }
 });
