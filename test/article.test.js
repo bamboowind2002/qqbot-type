@@ -18,12 +18,13 @@ test('validates article titles as path-safe Unicode names', () => {
 });
 
 test('parses short and long list commands and preserves direct text only', () => {
-  assert.deepEqual(parseArticleCommand('》文 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
-  assert.deepEqual(parseArticleCommand('》文章列表 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
-  assert.equal(extractDirectArticleText([{ type: 'reply' }, { type: 'text', data: { text: '》文' } }]), '》文');
-  assert.deepEqual(parseArticleCommand('》文 分类 古典 3'), { action: 'list', keyword: '', page: 3, category: '古典' });
-  assert.deepEqual(parseArticleCommand('》管 分类 添加 古典 文章'), { action: 'category-add', args: ['古典', '文章'] });
-  assert.deepEqual(parseArticleCommand('》发'), { action: '发', args: [], difficulty: false });
+  assert.deepEqual(parseArticleCommand('-文 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
+  assert.deepEqual(parseArticleCommand('-文章列表 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
+  assert.equal(extractDirectArticleText([{ type: 'reply' }, { type: 'text', data: { text: '-文' } }]), '-文');
+  assert.deepEqual(parseArticleCommand('-文 分类 古典 3'), { action: 'list', keyword: '', page: 3, category: '古典' });
+  assert.deepEqual(parseArticleCommand('-管 分类 添加 古典 文章'), { action: 'category-add', args: ['古典', '文章'] });
+  assert.deepEqual(parseArticleCommand('-发'), { action: '发', args: [], difficulty: false });
+  assert.equal(parseArticleCommand('》文 中秋节 2'), null);
 });
 
 test('formats a three-line article message with Unicode character count', () => {
@@ -32,5 +33,5 @@ test('formats a three-line article message with Unicode character count', () => 
 });
 
 test('includes the main user-facing article commands in built-in help', () => {
-  for (const command of ['》文', '》选', '》进', '》顺', '》随', '》乱', '》难度发文', '》搜', '》自', '》停']) assert.match(ARTICLE_HELP, new RegExp(command));
+  for (const command of ['-文', '-选', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
 });

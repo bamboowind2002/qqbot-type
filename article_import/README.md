@@ -14,7 +14,7 @@ node article_import/importer.js
 node article_import/importer.js https://www.jsxiaoshi.com/result_rank.html
 ```
 
-单页导入器当前限制单次最多 1000 篇、正文总大小最多 20 MiB，并在请求之间至少间隔 200ms。来源清单写入运行目录 `data/articles/import-sources.json`，不进入 Git。若排行榜页面只返回空壳 HTML、没有详情链接，应优先使用默认的文本列表接口；也可以人工导出少量正文，再用管理员命令 `》管 传 <标题>` 导入。
+单页导入器当前限制单次最多 1000 篇、正文总大小最多 20 MiB，并在请求之间至少间隔 200ms。来源清单写入运行目录 `data/articles/import-sources.json`，不进入 Git。若排行榜页面只返回空壳 HTML、没有详情链接，应优先使用默认的文本列表接口；也可以人工导出少量正文，再用管理员命令 `-管 传 <标题>` 导入。
 
 ## 批量导入全部文本
 
@@ -49,4 +49,4 @@ node article_import/batch-importer.js --max-pages=1
 node article_import/batch-importer.js --state=/tmp/article-import-state.json
 ```
 
-脚本只写文章文件，不连接 NapCat，也不修改数据库；文章进度和用户设置不受影响。全部导入后，如需使用难度发文，使用机器人管理员命令 `》管 索` 同步难度地图。
+脚本只写文章文件，不连接 NapCat，也不修改数据库；文章进度和用户设置不受影响。全部导入后，如需使用难度发文，使用机器人管理员命令 `-管 索` 同步难度地图。

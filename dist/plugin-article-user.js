@@ -1,6 +1,6 @@
 import { bot, consql } from './bot.js';
 import { Structs } from 'node-napcat-ts';
-import { parseArticleCommand, extractDirectArticleText } from './articleCommands.js';
+import { ARTICLE_PREFIX, parseArticleCommand, extractDirectArticleText } from './articleCommands.js';
 import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, setProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
@@ -27,14 +27,14 @@ async function list(e, command) {
 
 async function progress(e, args) {
   const settings = await getArticleSettings(consql, userId(e));
-  if (!settings.current_title) return send(e, '尚未选择文章，请先发送“》选 <标题>”。');
+  if (!settings.current_title) return send(e, '尚未选择文章，请先发送“-选 <标题>”。');
   const title = settings.current_title, body = await readArticle(title), length = [...body].length;
   const oldPosition = await getProgress(consql, userId(e), title);
   const expression = args.join(' ').trim();
   let position = oldPosition;
   if (expression) {
     const match = expression.match(/^([+=-])(\d+)$/);
-    if (!match) throw new Error('格式：》进、》进 +500、》进 -500 或 》进 =12345。');
+    if (!match) throw new Error('格式：-进、-进 +500、-进 -500 或 -进 =12345。');
     const value = Number(match[2]);
     position = match[1] === '+' ? oldPosition + value : match[1] === '-' ? oldPosition - value : value;
     position = clampProgress(position, length);
@@ -63,7 +63,7 @@ async function articleMode(e, mode, args) {
   const parsed = parseSegmentArguments(split[0].trim().split(/\s+/).filter(Boolean), Number(settings.segment_length) || 100);
   const condition = split.length > 1 ? split.slice(1).join('|').trim() : '';
   const title = parsed.title || settings.current_title;
-  if (!title) throw new Error('尚未选择文章，请先发送“》选 <标题>”或在命令后附文章标题。');
+  if (!title) throw new Error('尚未选择文章，请先发送“-选 <标题>”或在命令后附文章标题。');
   const body = await readArticle(title), chars = [...body];
   await setSegmentLength(consql, userId(e), parsed.length);
   let segment;
@@ -207,19 +207,19 @@ bot.on('message', async e => {
     if (command.action === '发') return repeatLast(e);
     if (command.action === 'list') return list(e, command);
     if (command.action === '选' || command.action === '选择文章') {
-      if (!command.args?.length) throw new Error('格式：》选 <文章标题>');
+      if (!command.args?.length) throw new Error('格式：-选 <文章标题>');
       return send(e, `已选择文章“${await selectArticle(consql, userId(e), command.args.join(' '))}”。`);
     }
     if (command.action === '进' || command.action === '文章进度') return progress(e, command.args || []);
     if (command.action === '搜' || command.action === '文内搜索') {
-      if (!command.args?.length) throw new Error('格式：》搜 <关键词> [页码] [于 <文章标题>]');
+      if (!command.args?.length) throw new Error('格式：-搜 <关键词> [页码] [于 <文章标题>]');
       return search(e, command.args);
     }
     if (command.action === '顺' || command.action === '顺序发文') return articleMode(e, 'ordered', command.args);
     if (command.action === '随' || command.action === '随机段落发文') return articleMode(e, 'paragraph', command.args);
     if (command.action === '乱' || command.action === '随机选字发文') return articleMode(e, 'characters', command.args);
     if (command.action === '难度发文') {
-      if (!command.args?.length) throw new Error('格式：》难度发文 <淼|水|易|普|难|虐|爆表> [字数]');
+      if (!command.args?.length) throw new Error('格式：-难度发文 <淼|水|易|普|难|虐|爆表> [字数]');
       const difficulty = command.args[0];
       return difficultyMode(e, difficulty, command.args.slice(1));
     }
@@ -231,6 +231,6 @@ bot.on('message', async e => {
 });
 
 bot.on('message', async e => {
-  if (String(e.raw_message || '').startsWith('》')) return;
+  if (String(e.raw_message || '').startsWith(ARTICLE_PREFIX)) return;
   try { await handleScore(e); } catch (err) { console.warn('处理发文成绩失败：', err.message); }
 });
