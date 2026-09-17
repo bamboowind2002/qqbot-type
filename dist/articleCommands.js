@@ -4,7 +4,7 @@ export const ARTICLE_PREFIX = '-';
 export function isArticleAdmin(id) { return String(id) === ARTICLE_ADMIN_QQ; }
 
 export function parseArticleCommand(raw) {
-  const text = String(raw ?? '').trim();
+  const text = String(raw ?? '').split(/\r?\n/, 1)[0].trim();
   if (!text.startsWith(ARTICLE_PREFIX)) return null;
   const body = text.slice(ARTICLE_PREFIX.length).trim();
   if (!body) return { action: 'help' };
