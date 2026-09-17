@@ -74,15 +74,15 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
       join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
     `,
   [generation, rank, articlePivot, articleLimit]);
+  // The caller re-reads and re-ranks every block candidate, so a revision
+  // lookup here is redundant and turns random index reads into costly joins.
   const blockCandidates = await wrappedQuery(connection, `
-    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
+    select r.title, r.start, r.length, r.score, r.\`rank\`
       from article_difficulty_records r
-      join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
      where r.generation_id = ? and r.\`rank\` = ? and r.block_key >= ?
      order by r.block_key limit ?`, [generation, rank, blockPivot, blockLimit], `
-    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
+    select r.title, r.start, r.length, r.score, r.\`rank\`
       from article_difficulty_records r
-      join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
      where r.generation_id = ? and r.\`rank\` = ? and r.block_key < ?
      order by r.block_key limit ?`, [generation, rank, blockPivot, blockLimit]);
   const unique = new Map([...articleCandidates, ...blockCandidates].map(row => [`${row.title}:${row.start}`, row]));

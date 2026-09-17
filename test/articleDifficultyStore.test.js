@@ -36,4 +36,5 @@ test('mixed sampling wraps both random-key indexes without ORDER BY RAND', async
   assert.equal(queries.filter(item => /min\(block_key\)/u.test(item.sql)).length, 2);
   assert.equal(queries.filter(item => /article_key\s*</u.test(item.sql)).length, 1);
   assert.equal(queries.filter(item => /block_key\s*</u.test(item.sql)).length, 1);
+  assert.equal(queries.filter(item => /order by r\.block_key/u.test(item.sql) && /article_difficulty_articles/u.test(item.sql)).length, 0);
 });
