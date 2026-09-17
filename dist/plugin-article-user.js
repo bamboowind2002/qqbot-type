@@ -170,6 +170,13 @@ async function repeatLast(e) {
   return articleMode(e, mode, args);
 }
 
+async function conditionStatus(e) {
+  const session = getArticleSession(sessionKey(e));
+  if (session) return send(e, session.conditionText ? `当前会话自动续段条件：${session.conditionText}` : '当前会话未设置自动续段条件（无条件续段）。');
+  const settings = await getArticleSettings(consql, userId(e));
+  return send(e, settings.last_condition ? `已保存的自动续段条件：${settings.last_condition}` : '当前没有已设置的自动续段条件。');
+}
+
 async function continueSession(e, session, force = false) {
   touchArticleSession(session);
   if (session.mode === 'ordered') await setProgress(consql, userId(e), session.title, session.nextPosition);
@@ -216,6 +223,7 @@ bot.on('message', async e => {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
     if (command.action === '发') return repeatLast(e);
+    if (command.action === '条件') return conditionStatus(e);
     if (command.action === 'list') return list(e, command);
     if (command.action === '选' || command.action === '选择文章') {
       if (!command.args?.length) throw new Error('格式：-选 <文章标题>');

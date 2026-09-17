@@ -31,6 +31,7 @@ export function parseArticleCommand(raw) {
     return { action: map[op] || 'admin-help', args: rest };
   }
   const difficultyAliases = new Set(['淼', '水', '易', '普', '难', '虐', '爆', '难度发文']);
+  if (head === '条件') return { action: '条件', args: rest };
   return { action: head, args: rest, difficulty: difficultyAliases.has(head) };
 }
 
@@ -54,6 +55,7 @@ export const ARTICLE_HELP = `发文命令
 -上/下：上一段或下一段（上一段仅顺序发文支持）
 -发：重复当前会话上一条发文消息；会话失效时按用户上次配置重新发文
 -自 [成绩条件]：设置自动续段条件，不带条件表示无条件续段
+-条件：查看当前会话或已保存的自动续段条件
 -停：结束当前发文会话
 
 成绩条件示例：速度>=100 且 错字=0；(速度>=100 或 击键>=5) 且 键准>=95%
