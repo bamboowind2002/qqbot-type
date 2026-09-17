@@ -11,9 +11,13 @@ export function parseArticleCommand(raw) {
   const [head, ...rest] = body.split(/\s+/);
   if (head === '文' || head === '文章列表') {
     let category = null;
+    let showLength = rest[0] === '长度' || rest[0] === '字数';
+    if (showLength) rest.shift();
     if (rest[0] === '分类') { rest.shift(); category = rest.shift() || ''; }
+    if (rest[0] === '长度' || rest[0] === '字数') { rest.shift(); showLength = true; }
     const page = /^\d+$/.test(rest.at(-1) || '') ? Number(rest.pop()) : 1;
-    return category === null ? { action: 'list', keyword: rest.join(' '), page } : { action: 'list', keyword: rest.join(' '), page, category };
+    const extra = showLength ? { showLength: true } : {};
+    return category === null ? { action: 'list', keyword: rest.join(' '), page, ...extra } : { action: 'list', keyword: rest.join(' '), page, category, ...extra };
   }
   if (head === '管' || head === '文章管理') {
     let op = rest.shift() || '帮助';
@@ -36,7 +40,9 @@ export function extractDirectArticleText(message) {
 
 export const ARTICLE_HELP = `发文命令
 -文 [关键词] [页码]：查看文章列表
+-文 长度 [关键词] [页码]：查看文章列表及紧凑正文长度
 -文 分类 <分类名> [关键词] [页码]：按分类查看文章
+-文 分类 <分类名> 长度 [关键词] [页码]：查看分类文章及长度
 -选 <标题>：选择当前文章
 -进 [+/−/=数字]：查看或调整顺序发文进度
 -顺 [字数] [标题]：顺序发文

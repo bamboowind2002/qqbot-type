@@ -22,7 +22,11 @@ async function list(e, command) {
   if (command.keyword) names = names.filter(name => name.includes(command.keyword));
   if (!names.length) return send(e, '暂无文章。');
   const page = Math.max(1, command.page || 1), size = 50;
-  return send(e, `文章列表（${page}/${Math.max(1, Math.ceil(names.length / size))}，共 ${names.length} 篇）\n${names.slice((page - 1) * size, page * size).join('\n')}`);
+  const pageNames = names.slice((page - 1) * size, page * size);
+  const display = command.showLength
+    ? await Promise.all(pageNames.map(async title => `${title}（${[...(await readArticleViews(title)).compactText].length}字）`))
+    : pageNames;
+  return send(e, `文章列表（${page}/${Math.max(1, Math.ceil(names.length / size))}，共 ${names.length} 篇）\n${display.join('\n')}`);
 }
 
 async function progress(e, args) {

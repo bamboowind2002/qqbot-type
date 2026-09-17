@@ -23,6 +23,8 @@ test('validates article titles as path-safe Unicode names', () => {
 
 test('parses short and long list commands and preserves direct text only', () => {
   assert.deepEqual(parseArticleCommand('-文 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
+  assert.deepEqual(parseArticleCommand('-文 长度 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2, showLength: true });
+  assert.deepEqual(parseArticleCommand('-文 分类 古典 长度 2'), { action: 'list', keyword: '', page: 2, category: '古典', showLength: true });
   assert.deepEqual(parseArticleCommand('-文章列表 中秋节 2'), { action: 'list', keyword: '中秋节', page: 2 });
   assert.equal(extractDirectArticleText([{ type: 'reply' }, { type: 'text', data: { text: '-文' } }]), '-文');
   assert.deepEqual(parseArticleCommand('-文 分类 古典 3'), { action: 'list', keyword: '', page: 3, category: '古典' });
