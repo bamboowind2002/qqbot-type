@@ -147,11 +147,12 @@ function diskFreeBytes(directory) {
   catch (_) { return Infinity; }
 }
 
-export function listArticles() {
+export function listArticles({ sort = true } = {}) {
   if (!fs.existsSync(ARTICLE_TEXT_DIR)) return [];
-  return fs.readdirSync(ARTICLE_TEXT_DIR, { withFileTypes: true })
+  const titles = fs.readdirSync(ARTICLE_TEXT_DIR, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.txt'))
-    .map(entry => entry.name.slice(0, -4)).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    .map(entry => entry.name.slice(0, -4));
+  return sort ? titles.sort((a, b) => a.localeCompare(b, 'zh-CN')) : titles;
 }
 
 async function writeArticle(title, text, state = null) {
