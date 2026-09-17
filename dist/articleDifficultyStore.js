@@ -48,38 +48,38 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
   const articleRows = await wrappedQuery(connection, `
     select distinct article_key, title
       from article_difficulty_records
-     where generation_id = ? and rank = ? and article_key >= ?
+     where generation_id = ? and \`rank\` = ? and article_key >= ?
      order by article_key, title limit ?`, [generation, rank, articlePivot, articleLimit], `
     select distinct article_key, title
       from article_difficulty_records
-     where generation_id = ? and rank = ? and article_key < ?
+     where generation_id = ? and \`rank\` = ? and article_key < ?
      order by article_key, title limit ?`, [generation, rank, articlePivot, articleLimit]);
   const articleCandidates = [];
   for (const article of articleRows) {
     const pivot = random();
     const rows = await wrappedQuery(connection, `
-      select r.title, r.start, r.length, r.score, r.rank, a.revision
+        select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
         from article_difficulty_records r
         join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-       where r.generation_id = ? and r.title = ? and r.rank = ? and r.block_key >= ?
+       where r.generation_id = ? and r.title = ? and r.\`rank\` = ? and r.block_key >= ?
        order by r.block_key limit ?`, [generation, article.title, rank, pivot, 1], `
-      select r.title, r.start, r.length, r.score, r.rank, a.revision
+        select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
         from article_difficulty_records r
         join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-       where r.generation_id = ? and r.title = ? and r.rank = ? and r.block_key < ?
+       where r.generation_id = ? and r.title = ? and r.\`rank\` = ? and r.block_key < ?
        order by r.block_key limit ?`, [generation, article.title, rank, pivot, 1]);
     if (rows[0]) articleCandidates.push(rows[0]);
   }
   const blockCandidates = await wrappedQuery(connection, `
-    select r.title, r.start, r.length, r.score, r.rank, a.revision
+    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
       from article_difficulty_records r
       join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-     where r.generation_id = ? and r.rank = ? and r.block_key >= ?
+     where r.generation_id = ? and r.\`rank\` = ? and r.block_key >= ?
      order by r.block_key limit ?`, [generation, rank, blockPivot, blockLimit], `
-    select r.title, r.start, r.length, r.score, r.rank, a.revision
+    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
       from article_difficulty_records r
       join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-     where r.generation_id = ? and r.rank = ? and r.block_key < ?
+     where r.generation_id = ? and r.\`rank\` = ? and r.block_key < ?
      order by r.block_key limit ?`, [generation, rank, blockPivot, blockLimit]);
   const unique = new Map([...articleCandidates, ...blockCandidates].map(row => [`${row.title}:${row.start}`, row]));
   return { backend: 'mysql', generationId: generation, records: [...unique.values()] };

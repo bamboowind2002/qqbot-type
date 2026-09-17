@@ -82,7 +82,7 @@ async function insertRecords(connection, rows) {
   if (!rows.length) return;
   const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?)').join(',');
   await mysqlQuery(connection, `insert into article_difficulty_records
-    (generation_id, title, start, length, score, rank, article_key, block_key)
+    (generation_id, title, start, length, score, \`rank\`, article_key, block_key)
     values ${placeholders}`,
   rows.flatMap(row => [row.generationId, row.title, row.start, row.length, row.score, row.rank, row.articleKey, row.blockKey]));
 }
@@ -111,7 +111,7 @@ async function copyArticle(connection, sourceGeneration, generationId, title) {
     values (?, ?, ?, ?, ?, ?)`, [generationId, title, row.revision, row.total_block_count, row.valid_record_count, row.invalid_record_count]);
   let afterStart = -1;
   while (!cancelRequested) {
-    const records = await mysqlQuery(connection, `select title, start, length, score, rank, article_key, block_key
+    const records = await mysqlQuery(connection, `select title, start, length, score, \`rank\`, article_key, block_key
       from article_difficulty_records where generation_id = ? and title = ? and start > ?
       order by start limit ?`, [sourceGeneration, title, afterStart, ARTICLE_MAP_INSERT_BATCH_SIZE]);
     if (!records.length) break;
