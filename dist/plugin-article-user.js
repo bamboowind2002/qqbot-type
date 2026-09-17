@@ -19,9 +19,17 @@ const send = (e, value) => e.quick_action([Structs.text(String(value))]);
 const userId = e => String(e.sender?.user_id ?? e.user_id);
 const triggerName = e => String(e.sender?.card || e.sender?.nickname || e.sender?.user_id || '未知用户');
 
-async function deliverOrderedSegment(e, { title, body, bodyIndex, bodyRevision, start, end, length, conditionText = '', persist = true }) {
+async function reportOrderedExhausted(e, title) {
+  await setProgress(consql, userId(e), title, 0);
+  closeArticleSession(sessionKey(e));
+  return send(e, '文已发空');
+}
+
+async function deliverOrderedSegment(e, { title, body, bodyIndex, bodyRevision, articleLength, start, end, length, conditionText = '', persist = true }) {
   const text = sliceCodePoints(body, start, end - start, bodyIndex);
-  const output = formatArticleMessage(text, { title, trigger: triggerName(e) });
+  const percent = articleLength ? (end * 100 / articleLength).toFixed(2) : '100.00';
+  const progressTitle = `${title}（${end}/${articleLength}字，${percent}%）`;
+  const output = formatArticleMessage(text, { title: progressTitle, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   await send(e, output);
   if (persist) {
@@ -41,9 +49,9 @@ async function sendNextOrderedSegment(e, title, length, conditionText = '') {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
     const view = await readArticleViews(title), body = view.compactText, articleLength = view.compactIndex.length;
     const state = await getProgressState(consql, userId(e), title);
-    if (state.position >= articleLength) throw new Error('这篇文章已经发完了。');
+    if (state.position >= articleLength) return reportOrderedExhausted(e, title);
     const segment = orderedSegment(body, state.position, length, view.compactIndex);
-    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, start: state.position, end: segment.nextPosition, length, conditionText });
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, start: state.position, end: segment.nextPosition, length, conditionText });
   });
 }
 
@@ -218,10 +226,10 @@ async function repeatOrdered(e, title, length, conditionText = '', session = nul
       return send(e, session.lastMessage);
     }
     if (session) closeArticleSession(sessionKey(e));
-    if (repeat.range) return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, ...repeat.range, conditionText, persist: false });
-    if (repeat.completed) throw new Error('这篇文章已经发完了。');
+    if (repeat.range) return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...repeat.range, conditionText, persist: false });
+    if (repeat.completed) return reportOrderedExhausted(e, title);
     const segment = orderedSegment(body, state.position, length, view.compactIndex);
-    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, start: state.position, end: segment.nextPosition, length, conditionText });
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, start: state.position, end: segment.nextPosition, length, conditionText });
   });
 }
 
@@ -284,7 +292,7 @@ async function sendPreviousOrderedSegment(e, session) {
     const range = previousOrderedRange(state, articleLength);
     if (!range) throw new Error('没有可靠的上一段记录，请先发送一次“-顺”或“-下”。');
     if (range.atBeginning) throw new Error('已经是第一段，无法上一段。');
-    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, ...range, conditionText });
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...range, conditionText });
   });
 }
 
@@ -316,8 +324,7 @@ async function handleScore(e) {
     const view = await readArticleViews(session.title), articleLength = view.compactIndex.length;
     const state = await getProgressState(consql, userId(e), session.title);
     if (state.position >= articleLength) {
-      closeArticleSession(sessionKey(e));
-      return send(e, '这篇文章已经发完了。');
+      return reportOrderedExhausted(e, session.title);
     }
     if (!isOrderedSessionCurrent(session, state, articleLength)) {
       closeArticleSession(sessionKey(e));
