@@ -53,22 +53,30 @@ test('scores additive difficulty summaries with one shared water baseline', () =
 
 test('long segments are shortlisted from composed block summaries', async () => {
   const queries = [];
+  const articleRecords = Array.from({ length: ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT / 2 }, (_, index) => ({
+    title: `文章${index}`, start: 0, length: 100, score: 0.2, rank: '水', revision: `a${index}`
+  }));
+  const blockRecords = Array.from({ length: ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT / 2 }, (_, index) => ({
+    title: `长文${index}`, start: index * 100, length: 100, score: 0.2, rank: '水'
+  }));
   const connection = fakeConnection([
     [{ id: 9, algorithm_version: ARTICLE_DIFFICULTY_ALGORITHM_VERSION, block_size: 100, status: 'complete' }],
+    [{ id: 9, algorithm_version: ARTICLE_DIFFICULTY_ALGORITHM_VERSION, block_size: 100, status: 'complete' }],
+    articleRecords,
+    blockRecords,
     [
       { title: '偏易', start: 0, revision: 'b', hard_score: 0.9, water_delta: 0 },
       { title: '正好水', start: 100, revision: 'a', hard_score: 0.4, water_delta: 1 }
-    ],
-    []
+    ]
   ], queries);
   const result = await sampleDifficultySegments(connection, '水', 2000, 10, () => Buffer.alloc(8, 0x80));
   assert.equal(result.backend, 'mysql-summary');
   assert.equal(result.records.length, 2);
   assert.equal(result.records[0].title, '正好水');
   assert.equal(result.records[0].score, 0.2);
-  assert.equal(queries.length, 3);
-  assert.match(queries[1].sql, /e\.valid_prefix - s\.valid_prefix \+ 1 = \?/u);
-  assert.equal(queries[1].values[0], 1900);
-  assert.equal(queries[1].values.at(-2), 20);
-  assert.equal(queries[1].values.at(-1), ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT);
+  assert.equal(queries.length, 5);
+  assert.match(queries[4].sql, /\(s\.title, s\.start\) in/u);
+  assert.match(queries[4].sql, /e\.valid_prefix - s\.valid_prefix \+ 1 = \?/u);
+  assert.equal(queries[4].values[0], 1900);
+  assert.equal(queries[4].values.at(-1), 20);
 });

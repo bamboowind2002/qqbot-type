@@ -105,14 +105,14 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
   return { backend: 'mysql', generationId: generation, records: [...unique.values()] };
 }
 
-async function sampleComposedRows(connection, generation, rank, blockCount, random) {
-  const pivot = random();
-  // The composed query performs a primary-key lookup for the ending block of
-  // every sampled start. A large pool turns cold InnoDB pages into seconds of
-  // random I/O, while only a small shortlist is ever verified by the caller.
-  const poolLimit = ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT;
+async function composeSampledRows(connection, generation, sources, blockCount) {
+  const unique = new Map(sources.filter(source => Number.isInteger(Number(source.start)))
+    .map(source => [`${source.title}:${source.start}`, source]));
+  sources = [...unique.values()];
+  if (!sources.length) return [];
   const blockOffset = (blockCount - 1) * ARTICLE_DIFFICULTY_BLOCK_SIZE;
-  const query = comparison => `
+  const pairs = sources.map(() => '(?, ?)').join(',');
+  return mysqlQuery(connection, `
     select s.title, s.start, a.revision,
            e.hard_prefix - s.hard_prefix + s.hard_score as hard_score,
            e.water_prefix - s.water_prefix + s.water_delta as water_delta
@@ -122,14 +122,11 @@ async function sampleComposedRows(connection, generation, rank, blockCount, rand
        and e.start = s.start + ? and e.length = ?
       join article_difficulty_articles a
         on a.generation_id = s.generation_id and a.title = s.title
-     where s.generation_id = ? and s.\`rank\` = ? and s.length = ?
-       and s.block_key ${comparison} ?
-       and e.valid_prefix - s.valid_prefix + 1 = ?
-     order by s.block_key limit ?`;
-  return wrappedQuery(connection, query('>='),
-    [blockOffset, ARTICLE_DIFFICULTY_BLOCK_SIZE, generation, rank, ARTICLE_DIFFICULTY_BLOCK_SIZE, pivot, blockCount, poolLimit],
-    query('<'),
-    [blockOffset, ARTICLE_DIFFICULTY_BLOCK_SIZE, generation, rank, ARTICLE_DIFFICULTY_BLOCK_SIZE, pivot, blockCount, poolLimit]);
+     where s.generation_id = ? and s.length = ?
+       and (s.title, s.start) in (${pairs})
+       and e.valid_prefix - s.valid_prefix + 1 = ?`,
+  [blockOffset, ARTICLE_DIFFICULTY_BLOCK_SIZE, generation, ARTICLE_DIFFICULTY_BLOCK_SIZE,
+    ...sources.flatMap(source => [source.title, Number(source.start)]), blockCount]);
 }
 
 export async function sampleDifficultySegments(connection, rank, length, limit = ARTICLE_DIFFICULTY_CANDIDATE_LIMIT, random = randomKey) {
@@ -142,7 +139,11 @@ export async function sampleDifficultySegments(connection, rank, length, limit =
   }
   const blockCount = Math.floor(length / ARTICLE_DIFFICULTY_BLOCK_SIZE);
   try {
-    const rows = await sampleComposedRows(connection, active.id, rank, blockCount, random);
+    // First use the existing random-key indexes to obtain explicit primary
+    // keys. Composing only those keys avoids scanning thousands of short
+    // articles that cannot contain the requested long segment.
+    const sampled = await sampleDifficultyRecords(connection, rank, ARTICLE_DIFFICULTY_COMPOSED_SAMPLE_LIMIT, random);
+    const rows = await composeSampledRows(connection, active.id, sampled?.records || [], blockCount);
     const records = rows.map(row => ({
       title: row.title,
       start: Number(row.start),
