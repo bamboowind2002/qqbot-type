@@ -15,7 +15,28 @@ import { renameDifficultyMapTitle } from './articleMap.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
 
 const deleteTokens = new Map();
-const send = (e, value) => e.quick_action([Structs.text(String(value))]);
+function articleEventContext(e) {
+  return {
+    messageId: e.message_id,
+    messageType: e.message_type,
+    subType: e.sub_type,
+    userId: e.sender?.user_id ?? e.user_id,
+    groupId: e.group_id
+  };
+}
+
+async function send(e, value) {
+  const text = String(value);
+  console.log('[plugin-article] sending reply', { ...articleEventContext(e), length: text.length, preview: text.slice(0, 120) });
+  try {
+    const result = await e.quick_action([Structs.text(text)]);
+    console.log('[plugin-article] reply sent', articleEventContext(e));
+    return result;
+  } catch (err) {
+    console.error('[plugin-article] reply failed', { ...articleEventContext(e), error: err?.message || String(err) });
+    throw err;
+  }
+}
 const MAX_ARCHIVE_BYTES = 512 * 1024 ** 2;
 const MAX_ARCHIVE_FILES = 20_000;
 const MAX_ARCHIVE_TEXT_BYTES = 2 * 1024 ** 3;
@@ -120,6 +141,7 @@ async function handleAdmin(e, command) {
   if (command.action === 'category-list') {
     if (args.length) throw new Error('格式：-管 分类 列表');
     const rows = categoryStatus();
+    console.log('[plugin-article] category list prepared', { ...articleEventContext(e), categories: rows.length, articles: rows.reduce((sum, row) => sum + row.titles.length, 0) });
     return send(e, rows.length ? rows.map(row => `${row.category}（${row.titles.length}篇）${row.titles.length ? `\n${row.titles.join('\n')}` : ''}`).join('\n') : '暂无分类。');
   }
   if (command.action === 'category-rename') {
@@ -202,9 +224,17 @@ async function handleAdmin(e, command) {
 
 bot.on('message', async e => {
   try {
-    const command = parseArticleCommand(extractDirectArticleText(e.message));
+    const directText = extractDirectArticleText(e.message);
+    const command = parseArticleCommand(directText);
+    console.log('[plugin-article] message received', { ...articleEventContext(e), text: directText.slice(0, 200), command });
     if (!command) return;
     if (command.action === 'help') return send(e, ARTICLE_HELP);
-    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return handleAdmin(e, command);
-  } catch (err) { if (isArticleAdmin(e.sender?.user_id)) send(e, `发文管理失败：${err.message}`); }
+    const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
+    console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
+    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return await handleAdmin(e, command);
+  } catch (err) {
+    const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
+    console.error('[plugin-article] command failed', { ...articleEventContext(e), isAdmin, error: err?.message || String(err), stack: err?.stack });
+    if (isAdmin) await send(e, `发文管理失败：${err.message}`);
+  }
 });
