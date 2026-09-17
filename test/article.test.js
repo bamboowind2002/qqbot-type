@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeArticleText, validateArticleTitle } from '../dist/articleStorage.js';
-import { parseArticleCommand, extractDirectArticleText } from '../dist/articleCommands.js';
+import { parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from '../dist/articleCommands.js';
 import { formatArticleMessage } from '../dist/articleMessage.js';
 
 test('normalizes BOM, supported legacy encodings, and all Unicode whitespace', () => {
@@ -28,4 +28,8 @@ test('parses short and long list commands and preserves direct text only', () =>
 test('formats a three-line article message with Unicode character count', () => {
   const result = formatArticleMessage('你\n好😀', { title: '测试', segment: '12345', trigger: '昵称' });
   assert.match(result, /^测试-(?:淼|水|易|普|难|虐|爆表)\d+\.\d{2}\n你好😀\n-----第12345段-共3字-昵称$/);
+});
+
+test('includes the main user-facing article commands in built-in help', () => {
+  for (const command of ['》文', '》选', '》进', '》顺', '》随', '》乱', '》难度发文', '》搜', '》自', '》停']) assert.match(ARTICLE_HELP, new RegExp(command));
 });
