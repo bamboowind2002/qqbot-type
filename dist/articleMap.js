@@ -87,6 +87,25 @@ async function insertRecords(connection, rows) {
   rows.flatMap(row => [row.generationId, row.title, row.start, row.length, row.score, row.rank, row.articleKey, row.blockKey]));
 }
 
+async function insertArticles(connection, rows) {
+  if (!rows.length) return;
+  const placeholders = rows.map(() => '(?,?,?,?,?,?)').join(',');
+  await mysqlQuery(connection, `insert into article_difficulty_articles
+    (generation_id, title, revision, total_block_count, valid_record_count, invalid_record_count)
+    values ${placeholders}`, rows.flatMap(row => [row.generationId, row.title, row.revision, row.total, row.valid, row.invalid]));
+}
+
+async function updateArticles(connection, rows) {
+  if (!rows.length) return;
+  const placeholders = rows.map(() => '(?,?,?,?,?,?)').join(',');
+  await mysqlQuery(connection, `insert into article_difficulty_articles
+    (generation_id, title, revision, total_block_count, valid_record_count, invalid_record_count)
+    values ${placeholders}
+    on duplicate key update revision=values(revision), total_block_count=values(total_block_count),
+      valid_record_count=values(valid_record_count), invalid_record_count=values(invalid_record_count)`,
+  rows.flatMap(row => [row.generationId, row.title, row.revision, row.total, row.valid, row.invalid]));
+}
+
 async function createGeneration(connection, articleCount) {
   const result = await mysqlQuery(connection, `insert into article_difficulty_generations
     (algorithm_version, block_size, status, article_count)
@@ -101,39 +120,10 @@ async function activeGeneration(connection) {
   return rows[0] || null;
 }
 
-async function copyArticle(connection, sourceGeneration, generationId, title) {
-  const article = await mysqlQuery(connection, `select revision, total_block_count, valid_record_count, invalid_record_count
-    from article_difficulty_articles where generation_id = ? and title = ? limit 1`, [sourceGeneration, title]);
-  if (!article[0]) return null;
-  const row = article[0];
-  await mysqlQuery(connection, `insert into article_difficulty_articles
-    (generation_id, title, revision, total_block_count, valid_record_count, invalid_record_count)
-    values (?, ?, ?, ?, ?, ?)`, [generationId, title, row.revision, row.total_block_count, row.valid_record_count, row.invalid_record_count]);
-  let afterStart = -1;
-  while (!cancelRequested) {
-    const records = await mysqlQuery(connection, `select title, start, length, score, \`rank\`, article_key, block_key
-      from article_difficulty_records where generation_id = ? and title = ? and start > ?
-      order by start limit ?`, [sourceGeneration, title, afterStart, ARTICLE_MAP_INSERT_BATCH_SIZE]);
-    if (!records.length) break;
-    await insertRecords(connection, records.map(record => ({
-      generationId, title: record.title, start: Number(record.start), length: Number(record.length),
-      score: Number(record.score), rank: record.rank, articleKey: record.article_key, blockKey: record.block_key
-    })));
-    afterStart = Number(records.at(-1).start);
-    if (records.length < ARTICLE_MAP_INSERT_BATCH_SIZE) break;
-    await new Promise(resolve => setImmediate(resolve));
-  }
-  if (cancelRequested) return null;
-  return { total: Number(row.total_block_count), valid: Number(row.valid_record_count), invalid: Number(row.invalid_record_count) };
-}
-
 async function calculateArticle(connection, generationId, title, view) {
   const ranges = difficultyBlockRanges(view.compactIndex.length);
   const articleKey = randomKey();
   let valid = 0, invalid = 0, batch = [];
-  await mysqlQuery(connection, `insert into article_difficulty_articles
-    (generation_id, title, revision, total_block_count, valid_record_count, invalid_record_count)
-    values (?, ?, ?, 0, 0, 0)`, [generationId, title, view.compactRevision]);
   for (const range of ranges) {
     if (cancelRequested) break;
     try {
@@ -152,10 +142,21 @@ async function calculateArticle(connection, generationId, title, view) {
   }
   await insertRecords(connection, batch);
   if (cancelRequested) return null;
-  await mysqlQuery(connection, `update article_difficulty_articles
-    set total_block_count = ?, valid_record_count = ?, invalid_record_count = ?
-    where generation_id = ? and title = ?`, [ranges.length, valid, invalid, generationId, title]);
-  return { total: ranges.length, valid, invalid };
+  return { total: ranges.length, valid, invalid, revision: view.compactRevision };
+}
+
+async function copyReusableRecords(connection, sourceGeneration, generationId, titles) {
+  if (!titles.length) return;
+  await mysqlQuery(connection, 'create temporary table article_difficulty_reuse_titles (title varchar(255) not null primary key) engine=InnoDB');
+  for (let index = 0; index < titles.length; index += ARTICLE_MAP_INSERT_BATCH_SIZE) {
+    const batch = titles.slice(index, index + ARTICLE_MAP_INSERT_BATCH_SIZE);
+    await mysqlQuery(connection, `insert into article_difficulty_reuse_titles (title) values ${batch.map(() => '(?)').join(',')}`, batch);
+  }
+  await mysqlQuery(connection, `insert into article_difficulty_records
+    (generation_id, title, start, length, score, \`rank\`, article_key, block_key)
+    select ?, r.title, r.start, r.length, r.score, r.\`rank\`, r.article_key, r.block_key
+      from article_difficulty_records r join article_difficulty_reuse_titles u on u.title = r.title
+     where r.generation_id = ?`, [generationId, sourceGeneration]);
 }
 
 async function publishGeneration(connection, generationId, totals) {
@@ -191,27 +192,66 @@ export async function syncDifficultyMap(connection, onProgress = () => {}) {
   try {
     const active = await activeGeneration(connection);
     const reusable = canReuseDifficultyGeneration(active);
+    const oldArticles = new Map();
+    if (reusable) {
+      const rows = await mysqlQuery(connection, `select title, revision, total_block_count, valid_record_count, invalid_record_count
+        from article_difficulty_articles where generation_id = ?`, [active.id]);
+      for (const row of rows) oldArticles.set(row.title, row);
+    }
+    const reuseRows = [], changedRows = [], metadataRows = [];
     for (const title of titles) {
       if (cancelRequested) break;
       const view = await readArticleViews(title);
-      let counts = null;
-      if (reusable) {
-        const old = await mysqlQuery(connection, `select revision from article_difficulty_articles
-          where generation_id = ? and title = ? limit 1`, [active.id, title]);
-        if (old[0]?.revision === view.compactRevision) counts = await copyArticle(connection, active.id, generationId, title);
+      const total = difficultyBlockRanges(view.compactIndex.length).length;
+      const old = oldArticles.get(title);
+      if (reusable && old?.revision === view.compactRevision) {
+        reuseRows.push({ title, revision: old.revision, total: Number(old.total_block_count), valid: Number(old.valid_record_count), invalid: Number(old.invalid_record_count) });
+        metadataRows.push({ generationId, title, revision: old.revision, total: Number(old.total_block_count), valid: Number(old.valid_record_count), invalid: Number(old.invalid_record_count) });
+      } else {
+        changedRows.push({ title, revision: view.compactRevision, total });
+        metadataRows.push({ generationId, title, revision: view.compactRevision, total, valid: 0, invalid: total });
       }
-      if (!counts && !cancelRequested) { counts = await calculateArticle(connection, generationId, title, view); task.changed++; }
+    }
+    for (let index = 0; index < metadataRows.length && !cancelRequested; index += ARTICLE_MAP_INSERT_BATCH_SIZE) {
+      await insertArticles(connection, metadataRows.slice(index, index + ARTICLE_MAP_INSERT_BATCH_SIZE));
+    }
+    if (cancelRequested) {
+      await mysqlQuery(connection, `update article_difficulty_generations set status = 'failed', processed_articles = ?,
+        error_message = 'cancelled', completed_at = now(3) where id = ?`, [task.processed, generationId]);
+      return { cancelled: true, ...task };
+    }
+    await copyReusableRecords(connection, active?.id, generationId, reuseRows.map(row => row.title));
+    const completedUpdates = [];
+    for (const row of reuseRows) {
+      if (cancelRequested) break;
+      task.processed++;
+      task.records += row.valid;
+      task.totalBlocks += row.total;
+      task.invalid += row.invalid;
+      if (task.processed % 500 === 0) onProgress({ ...task });
+    }
+    for (const item of changedRows) {
+      if (cancelRequested) break;
+      const view = await readArticleViews(item.title);
+      const counts = await calculateArticle(connection, generationId, item.title, view);
       if (!counts) break;
+      completedUpdates.push({ generationId, title: item.title, revision: counts.revision, total: counts.total, valid: counts.valid, invalid: counts.invalid });
       task.processed++;
       task.records += counts.valid;
       task.totalBlocks += counts.total;
       task.invalid += counts.invalid;
-      if (task.processed % 25 === 0 || task.processed === task.total) await mysqlQuery(connection, `update article_difficulty_generations
-        set processed_articles = ?, total_block_count = ?, valid_record_count = ?, invalid_record_count = ? where id = ?`,
-      [task.processed, task.totalBlocks, task.records, task.invalid, generationId]);
-      onProgress({ ...task });
+      if (completedUpdates.length >= ARTICLE_MAP_INSERT_BATCH_SIZE) {
+        await updateArticles(connection, completedUpdates.splice(0));
+      }
+      if (task.processed % 500 === 0 || task.processed === task.total) onProgress({ ...task });
       await new Promise(resolve => setImmediate(resolve));
     }
+    await updateArticles(connection, completedUpdates);
+    task.changed = changedRows.length;
+    await mysqlQuery(connection, `update article_difficulty_generations
+      set processed_articles = ?, total_block_count = ?, valid_record_count = ?, invalid_record_count = ? where id = ?`,
+    [task.processed, task.totalBlocks, task.records, task.invalid, generationId]);
+    onProgress({ ...task });
     if (cancelRequested) {
       await mysqlQuery(connection, `update article_difficulty_generations set status = 'failed', processed_articles = ?,
         total_block_count = ?, valid_record_count = ?, invalid_record_count = ?, error_message = 'cancelled', completed_at = now(3) where id = ?`,
