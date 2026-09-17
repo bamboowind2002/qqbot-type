@@ -18,12 +18,33 @@ export function get_reply(msg) {
     }
 }
 
+export async function get_file_buffer(file, messageType = null) {
+    const fileId = file?.data?.file_id;
+    if (!fileId) throw new Error('文件缺少 file_id。');
+    const methods = messageType === 'group'
+        ? [bot.get_group_file_url.bind(bot)]
+        : messageType === 'private'
+            ? [bot.get_private_file_url.bind(bot)]
+            : [bot.get_private_file_url.bind(bot), bot.get_group_file_url.bind(bot)];
+    let lastError;
+    for (const getUrl of methods) {
+        try {
+            const info = await getUrl({ file_id: fileId });
+            if (!info?.url) throw new Error('文件下载地址为空。');
+            const response = await fetch(info.url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return Buffer.from(await response.arrayBuffer());
+        } catch (error) { lastError = error; }
+    }
+    throw lastError || new Error('无法获取文件下载地址。');
+}
+
 /**
  * 
  * @param {import('node-napcat-ts').Receive[keyof import('node-napcat-ts').Receive][]} msg 
  * @returns {Promise<string[]>}
  */
-export async function get_text_content_from_msg(msg, read_file=true) {
+export async function get_text_content_from_msg(msg, read_file=true, messageType=null) {
     let res = []
     // console.log(msg)
     for (let tmp of msg) {
@@ -41,7 +62,7 @@ export async function get_text_content_from_msg(msg, read_file=true) {
         } else if (tmp.type === 'reply') {
             try {
                 let reply = await bot.get_msg({ message_id: tmp.data.id })
-                res = res.concat(await get_text_content_from_msg(reply.message))
+                res = res.concat(await get_text_content_from_msg(reply.message, read_file, reply.message_type))
                 // res.push(`${await get_text_content_from_msg(reply.message)}`)
             } catch (e) {
                 res.push(`[引用]`)
@@ -55,7 +76,7 @@ export async function get_text_content_from_msg(msg, read_file=true) {
                 try {
                     let forward = await bot.get_forward_msg({ message_id: tmp.data.id })
                     for (let e of forward.messages) {
-                        res = res.concat(await get_text_content_from_msg(e.message))
+                        res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type))
                         // res.push(`${await get_text_content_from_msg(e.message)}`)
                     }
                 } catch (e) {
@@ -64,7 +85,7 @@ export async function get_text_content_from_msg(msg, read_file=true) {
             } else {
                 let forward = tmp.data.content
                 for (let e of forward) {
-                    res = res.concat(await get_text_content_from_msg(e.message))
+                    res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type))
                     // res.push(`${await get_text_content_from_msg(e.message)}`)
                 }
             }
@@ -78,13 +99,8 @@ export async function get_text_content_from_msg(msg, read_file=true) {
                 res.push(`[文件]`)
             } else {
                 try {
-                    let file_info = await bot.get_file({ file_id: tmp.data.file_id });
-                    if (typeof (file_info) === 'undefined') {
-                        res.push(`[文件]`)
-                    } else {
-                        let buf = Buffer.from(file_info.base64, 'base64').toString('utf-8')
-                        res.push(buf)
-                    }
+                    const buf = await get_file_buffer(tmp, messageType);
+                    res.push(buf.toString('utf-8'))
                 } catch (error) {
                     res.push(`[文件]`)
                 }

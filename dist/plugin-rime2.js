@@ -4,9 +4,10 @@ const require = createRequire(import.meta.url);
 const rime_plugin = require('../build/Release/rime_plugin2.node');
 import puppeteer from 'puppeteer';
 import { Structs } from 'node-napcat-ts';
-import { get_text_content_from_msg, has_reply, get_reply } from './util.js';
+import { get_text_content_from_msg, get_file_buffer, has_reply, get_reply } from './util.js';
 import compressing from 'compressing'
 import fs from 'fs'
+import path from 'node:path'
 import mysql from 'mysql'
 import { scheduler } from 'timers/promises';
 const RIME_SCHEME = `${process.cwd()}/rime_scheme`
@@ -375,7 +376,7 @@ bot.on("message", async e => {
             // }
 
             e.quick_action([Structs.text("上传中...")]);
-            let file_info = await bot.get_file({ file_id: msg.message[0].data.file_id });
+            let file_buffer = await get_file_buffer(msg.message[0], msg.message_type);
 
 
             if (fs.existsSync(`${RIME_SCHEME}/${name}`)) {
@@ -383,17 +384,18 @@ bot.on("message", async e => {
             }
 
 
-            fs.writeFileSync(`${RIME_SCHEME}/${file_info.file_name}`, file_info.base64, 'base64');
+            const file_name = path.basename(msg.message[0].data.file || `upload-${Date.now()}.zip`);
+            fs.writeFileSync(`${RIME_SCHEME}/${file_name}`, file_buffer);
             // e.quick_action([Structs.text("解压中...")])
 
             try {
-                await compressing.zip.uncompress(`${RIME_SCHEME}/${file_info.file_name}`, `${RIME_SCHEME}/${name}/`)
+                await compressing.zip.uncompress(`${RIME_SCHEME}/${file_name}`, `${RIME_SCHEME}/${name}/`)
             } catch (e) {
                 e.quick_action([Structs.text("解压失败")])
-                fs.rmSync(`${RIME_SCHEME}/${file_info.file_name}`);
+                fs.rmSync(`${RIME_SCHEME}/${file_name}`);
                 return;
             }
-            fs.rmSync(`${RIME_SCHEME}/${file_info.file_name}`);
+            fs.rmSync(`${RIME_SCHEME}/${file_name}`);
             e.quick_action([Structs.text("上传完成")])
 
             return;
