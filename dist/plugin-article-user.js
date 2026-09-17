@@ -159,7 +159,15 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
 
 async function repeatLast(e) {
   const key = sessionKey(e), session = getArticleSession(key);
-  if (session?.lastMessage) { touchArticleSession(session); return send(e, session.lastMessage); }
+  if (session?.lastMessage) {
+    if (session.mode === 'ordered') {
+      const body = await readArticle(session.title);
+      const position = await getProgress(consql, userId(e), session.title);
+      if (position >= [...body].length) throw new Error('这篇文章已经发完了。');
+    }
+    touchArticleSession(session);
+    return send(e, session.lastMessage);
+  }
   const settings = await getArticleSettings(consql, userId(e));
   let mode = settings.last_mode, title = settings.last_title || settings.current_title;
   if (!mode && title) mode = 'ordered';
