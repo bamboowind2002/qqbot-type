@@ -28,6 +28,35 @@ export function articlePath(title) {
   return path.join(ARTICLE_TEXT_DIR, `${validateArticleTitle(title)}.txt`);
 }
 
+export async function renameArticle(oldTitle, newTitle) {
+  oldTitle = validateArticleTitle(oldTitle);
+  newTitle = validateArticleTitle(newTitle);
+  if (oldTitle === newTitle) throw new Error('新旧文章标题相同，无需重命名。');
+  const source = articlePath(oldTitle), target = articlePath(newTitle);
+  const sourceStat = await fsp.stat(source).catch(err => {
+    if (err.code === 'ENOENT') throw new Error(`文章“${oldTitle}”不存在。`);
+    throw err;
+  });
+  if (!sourceStat.isFile()) throw new Error(`文章“${oldTitle}”不是普通文件。`);
+  try {
+    await fsp.lstat(target);
+    throw new Error(`文章“${newTitle}”已存在。`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const { renameArticleCategoryLinks } = await import('./articleCategories.js');
+  await fsp.rename(source, target);
+  try {
+    await renameArticleCategoryLinks(oldTitle, newTitle);
+  } catch (err) {
+    await fsp.rename(target, source).catch(() => {});
+    throw err;
+  }
+  invalidateArticleView(oldTitle);
+  invalidateArticleView(newTitle);
+  return { oldTitle, newTitle };
+}
+
 export function detectArticleEncoding(buffer, explicit) {
   if (explicit) {
     const encoding = ENCODINGS.get(String(explicit).toLowerCase());

@@ -24,10 +24,10 @@ export function parseArticleCommand(raw) {
     if (op === '确认' && rest[0] === '删除') { op = '确认删除'; rest.shift(); }
     if (op === '分类') {
       const sub = rest.shift() || '帮助';
-      const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list' };
+      const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list', '重命名': 'category-rename', '改名': 'category-rename' };
       return { action: categoryMap[sub] || 'category-help', args: rest };
     }
-    const map = { '传': 'upload', '上传': 'upload', '批传': 'batch-upload', '批量传': 'batch-upload', '批量上传': 'batch-upload', '改': 'replace', '替换': 'replace', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete', '索': 'map-sync', '同步难度地图': 'map-sync', '状': 'map-status', '难度地图状态': 'map-status', '取消': 'map-cancel', '取消建图': 'map-cancel' };
+    const map = { '传': 'upload', '上传': 'upload', '批传': 'batch-upload', '批量传': 'batch-upload', '批量上传': 'batch-upload', '改': 'replace', '替换': 'replace', '重命名': 'article-rename', '文章重命名': 'article-rename', '文章改名': 'article-rename', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete', '索': 'map-sync', '同步难度地图': 'map-sync', '状': 'map-status', '难度地图状态': 'map-status', '取消': 'map-cancel', '取消建图': 'map-cancel' };
     return { action: map[op] || 'admin-help', args: rest };
   }
   const difficultyAliases = new Set(['淼', '水', '易', '普', '难', '虐', '爆', '难度发文']);
@@ -67,6 +67,8 @@ export const ARTICLE_HELP = `发文命令
 -管 删 <标题>：请求删除文章
 -管 确认 <确认码>：确认删除
 -管 分类 添加/删除 <分类名> <标题>：维护分类软链接
+-管 分类 重命名 <旧分类名> <新分类名>：重命名分类
+-管 重命名 <旧标题> <新标题>：重命名文章（“文章重命名”同义）
 -管 分类 列表：查看分类
 -管 索：同步难度地图
 -管 状：查看难度地图同步状态

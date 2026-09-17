@@ -22,6 +22,61 @@ export function listCategories() {
     .filter(entry => entry.isDirectory()).map(entry => entry.name).sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
+export async function renameArticleCategory(oldCategory, newCategory) {
+  oldCategory = validateCategoryName(oldCategory);
+  newCategory = validateCategoryName(newCategory);
+  if (oldCategory === newCategory) throw new Error('新旧分类名相同，无需重命名。');
+  const source = categoryPath(oldCategory), target = categoryPath(newCategory);
+  const sourceStat = await fsp.lstat(source).catch(err => {
+    if (err.code === 'ENOENT') throw new Error(`分类“${oldCategory}”不存在。`);
+    throw err;
+  });
+  if (!sourceStat.isDirectory()) throw new Error(`分类“${oldCategory}”不是目录。`);
+  try {
+    await fsp.lstat(target);
+    throw new Error(`分类“${newCategory}”已存在。`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  await fsp.rename(source, target);
+  return { oldCategory, newCategory };
+}
+
+export async function renameArticleCategoryLinks(oldTitle, newTitle) {
+  oldTitle = validateArticleTitle(oldTitle);
+  newTitle = validateArticleTitle(newTitle);
+  const changes = [];
+  for (const category of listCategories()) {
+    const dir = categoryPath(category);
+    const oldLink = linkPath(category, oldTitle), newLink = linkPath(category, newTitle);
+    let oldStat;
+    try { oldStat = await fsp.lstat(oldLink); } catch (err) { if (err.code === 'ENOENT') continue; throw err; }
+    if (!oldStat.isSymbolicLink()) throw new Error(`分类“${category}”中的文章条目不是软链接。`);
+    try {
+      await fsp.lstat(newLink);
+      throw new Error(`分类“${category}”中已存在文章“${newTitle}”。`);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    changes.push({ category, dir, oldLink, newLink });
+  }
+  const created = [];
+  const removed = [];
+  try {
+    for (const change of changes) {
+      await fsp.unlink(change.oldLink);
+      removed.push(change);
+      await fsp.symlink(path.relative(change.dir, path.join(ARTICLE_TEXT_DIR, `${newTitle}.txt`)), change.newLink, 'file');
+      created.push(change);
+    }
+  } catch (err) {
+    for (const change of created) await fsp.unlink(change.newLink).catch(() => {});
+    for (const change of removed) await fsp.symlink(path.relative(change.dir, path.join(ARTICLE_TEXT_DIR, `${oldTitle}.txt`)), change.oldLink, 'file').catch(() => {});
+    throw err;
+  }
+  return changes.length;
+}
+
 export async function addArticleCategory(category, title) {
   category = validateCategoryName(category); title = validateArticleTitle(title);
   const source = path.join(ARTICLE_TEXT_DIR, `${title}.txt`);

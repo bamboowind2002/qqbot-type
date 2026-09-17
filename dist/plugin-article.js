@@ -2,13 +2,17 @@ import { randomInt } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import mysql from 'mysql';
 import compressing from 'compressing';
 import { bot } from './bot.js';
+import { databaseConfig } from './config.js';
+import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, replaceArticleRange, deleteArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
+import { saveArticle, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
 import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
-import { addArticleCategory, removeArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
+import { renameDifficultyMapTitle } from './articleMap.js';
+import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
 
 const deleteTokens = new Map();
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
@@ -16,6 +20,16 @@ const MAX_ARCHIVE_BYTES = 512 * 1024 ** 2;
 const MAX_ARCHIVE_FILES = 20_000;
 const MAX_ARCHIVE_TEXT_BYTES = 2 * 1024 ** 3;
 function fileSegment(message) { return message?.find(x => x?.type === 'file') || null; }
+
+async function renameArticleReferences(oldTitle, newTitle) {
+  return runMysqlTransaction(() => mysql.createConnection(databaseConfig), async query => {
+    const progressCollision = await query('select qqid from article_progress where title = ? limit 1', [newTitle]);
+    if (progressCollision.length) throw new Error(`新文章标题“${newTitle}”已有用户进度记录，无法重命名。`);
+    await query('update article_progress set title = ? where title = ?', [newTitle, oldTitle]);
+    await query('update article_user_settings set current_title = ? where current_title = ?', [newTitle, oldTitle]);
+    await query('update article_user_settings set last_title = ? where last_title = ?', [newTitle, oldTitle]);
+  });
+}
 
 async function findUploadFile(e, extension) {
   let file = fileSegment(e.message);
@@ -102,17 +116,41 @@ async function handleAdmin(e, command) {
   if (!isArticleAdmin(e.sender?.user_id)) return;
   const args = command.args;
   if (command.action === 'admin-help') return send(e, ARTICLE_HELP);
-  if (command.action === 'category-help') return send(e, '分类管理：-管 分类 添加 <分类名> <文章标题>；-管 分类 删除 <分类名> <文章标题>；-管 分类 列表');
+  if (command.action === 'category-help') return send(e, '分类管理：-管 分类 添加/删除 <分类名> <文章标题>；-管 分类 重命名 <旧分类名> <新分类名>；-管 分类 列表');
   if (command.action === 'category-list') {
     if (args.length) throw new Error('格式：-管 分类 列表');
     const rows = categoryStatus();
     return send(e, rows.length ? rows.map(row => `${row.category}（${row.titles.length}篇）${row.titles.length ? `\n${row.titles.join('\n')}` : ''}`).join('\n') : '暂无分类。');
+  }
+  if (command.action === 'category-rename') {
+    if (args.length !== 2) throw new Error('格式：-管 分类 重命名 <旧分类名> <新分类名>');
+    const result = await renameArticleCategory(args[0], args[1]);
+    return send(e, `分类“${result.oldCategory}”已重命名为“${result.newCategory}”。`);
   }
   if (command.action === 'category-add' || command.action === 'category-remove') {
     if (args.length < 2) throw new Error(`格式：-管 分类 ${command.action === 'category-add' ? '添加' : '删除'} <分类名> <文章标题>`);
     const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
     const result = command.action === 'category-add' ? await addArticleCategory(category, title) : await removeArticleCategory(category, title);
     return send(e, command.action === 'category-add' ? `文章“${result.title}”已${result.existed ? '在' : '加入'}分类“${result.category}”。` : `文章“${result.title}”已从分类“${result.category}”移除。`);
+  }
+  if (command.action === 'article-rename') {
+    if (args.length !== 2) throw new Error('格式：-管 重命名 <旧标题> <新标题>');
+    const oldTitle = validateArticleTitle(args[0]), newTitle = validateArticleTitle(args[1]);
+    if (getDifficultyMapTaskStatus().running) throw new Error('难度地图正在同步，请稍后再重命名文章。');
+    const filesystemRename = await renameArticle(oldTitle, newTitle);
+    let databaseRenamed = false;
+    try {
+      await renameArticleReferences(oldTitle, newTitle);
+      databaseRenamed = true;
+      await renameDifficultyMapTitle(oldTitle, newTitle);
+    } catch (err) {
+      if (databaseRenamed) {
+        try { await renameArticleReferences(newTitle, oldTitle); } catch (rollbackError) { console.warn('文章重命名数据库回滚失败:', rollbackError.message || rollbackError); }
+      }
+      try { await renameArticle(newTitle, oldTitle); } catch (rollbackError) { console.warn('文章重命名文件回滚失败:', rollbackError.message || rollbackError); }
+      throw err;
+    }
+    return send(e, `文章“${filesystemRename.oldTitle}”已重命名为“${filesystemRename.newTitle}”。`);
   }
   if (command.action === 'map-status') {
     const status = getDifficultyMapTaskStatus();
@@ -167,6 +205,6 @@ bot.on('message', async e => {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
     if (command.action === 'help') return send(e, ARTICLE_HELP);
-    if (['upload', 'batch-upload', 'replace', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove'].includes(command.action)) return handleAdmin(e, command);
+    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return handleAdmin(e, command);
   } catch (err) { if (isArticleAdmin(e.sender?.user_id)) send(e, `发文管理失败：${err.message}`); }
 });

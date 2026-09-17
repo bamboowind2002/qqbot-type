@@ -23,6 +23,18 @@ async function loadMap() {
   catch (err) { if (err.code === 'ENOENT') return { records: [] }; throw err; }
 }
 export async function readDifficultyMap() { return loadMap(); }
+
+export async function renameDifficultyMapTitle(oldTitle, newTitle) {
+  const map = await loadMap();
+  let changed = false;
+  const records = (map.records || []).map(record => {
+    if (record.title !== oldTitle) return record;
+    changed = true;
+    return { ...record, title: newTitle };
+  });
+  if (changed) await writeMap({ ...map, records, updatedAt: new Date().toISOString() });
+  return changed;
+}
 async function writeMap(map) {
   await fs.mkdir(path.dirname(ARTICLE_MAP_PATH), { recursive: true });
   const temporary = `${ARTICLE_MAP_PATH}.${process.pid}.${Date.now()}.tmp`;
