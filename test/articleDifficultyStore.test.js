@@ -24,7 +24,6 @@ test('mixed sampling wraps both random-key indexes without ORDER BY RAND', async
   const queries = [];
   const connection = fakeConnection([
     [{ id: 7, status: 'complete' }],
-    [], [{ article_key: Buffer.alloc(8), title: '甲' }],
     [], [recordA],
     [], [recordB]
   ], queries);
@@ -33,5 +32,8 @@ test('mixed sampling wraps both random-key indexes without ORDER BY RAND', async
   assert.equal(result.generationId, 7);
   assert.deepEqual(result.records, [recordA, recordB]);
   assert.equal(queries.some(item => /order\s+by\s+rand/iu.test(item.sql)), false);
-  assert.equal(queries.filter(item => /block_key\s*</u.test(item.sql)).length, 2);
+  assert.equal(queries.length, 5);
+  assert.equal(queries.filter(item => /min\(block_key\)/u.test(item.sql)).length, 2);
+  assert.equal(queries.filter(item => /article_key\s*</u.test(item.sql)).length, 1);
+  assert.equal(queries.filter(item => /block_key\s*</u.test(item.sql)).length, 1);
 });

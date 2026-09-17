@@ -45,31 +45,35 @@ export async function sampleDifficultyRecords(connection, rank, limit = ARTICLE_
   const generation = active.id;
   const articleLimit = Math.ceil(limit / 2), blockLimit = Math.floor(limit / 2);
   const articlePivot = random(), blockPivot = random();
-  const articleRows = await wrappedQuery(connection, `
-    select distinct article_key, title
-      from article_difficulty_records
-     where generation_id = ? and \`rank\` = ? and article_key >= ?
-     order by article_key, title limit ?`, [generation, rank, articlePivot, articleLimit], `
-    select distinct article_key, title
-      from article_difficulty_records
-     where generation_id = ? and \`rank\` = ? and article_key < ?
-     order by article_key, title limit ?`, [generation, rank, articlePivot, articleLimit]);
-  const articleCandidates = [];
-  for (const article of articleRows) {
-    const pivot = random();
-    const rows = await wrappedQuery(connection, `
-        select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
-        from article_difficulty_records r
-        join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-       where r.generation_id = ? and r.title = ? and r.\`rank\` = ? and r.block_key >= ?
-       order by r.block_key limit ?`, [generation, article.title, rank, pivot, 1], `
-        select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
-        from article_difficulty_records r
-        join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
-       where r.generation_id = ? and r.title = ? and r.\`rank\` = ? and r.block_key < ?
-       order by r.block_key limit ?`, [generation, article.title, rank, pivot, 1]);
-    if (rows[0]) articleCandidates.push(rows[0]);
-  }
+  // article_key and block_key are random per generation. Pick one block from
+  // each sampled article in one query instead of issuing an N+1 query loop.
+  const articleCandidates = await wrappedQuery(connection, `
+    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
+      from article_difficulty_records r
+      join (
+        select generation_id, \`rank\`, article_key, title, min(block_key) as block_key
+          from article_difficulty_records
+         where generation_id = ? and \`rank\` = ? and article_key >= ?
+         group by generation_id, \`rank\`, article_key, title
+         order by article_key, title limit ?
+      ) sampled on sampled.generation_id = r.generation_id and sampled.\`rank\` = r.\`rank\`
+        and sampled.article_key = r.article_key and sampled.title = r.title and sampled.block_key = r.block_key
+      join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
+    `,
+  [generation, rank, articlePivot, articleLimit], `
+    select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
+      from article_difficulty_records r
+      join (
+        select generation_id, \`rank\`, article_key, title, min(block_key) as block_key
+          from article_difficulty_records
+         where generation_id = ? and \`rank\` = ? and article_key < ?
+         group by generation_id, \`rank\`, article_key, title
+         order by article_key, title limit ?
+      ) sampled on sampled.generation_id = r.generation_id and sampled.\`rank\` = r.\`rank\`
+        and sampled.article_key = r.article_key and sampled.title = r.title and sampled.block_key = r.block_key
+      join article_difficulty_articles a on a.generation_id = r.generation_id and a.title = r.title
+    `,
+  [generation, rank, articlePivot, articleLimit]);
   const blockCandidates = await wrappedQuery(connection, `
     select r.title, r.start, r.length, r.score, r.\`rank\`, a.revision
       from article_difficulty_records r
