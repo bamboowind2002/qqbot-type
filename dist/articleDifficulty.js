@@ -3,6 +3,12 @@ export const DIFFICULTY_RANGES = Object.freeze({
   '普': [0.8, 5], '难': [5, 15], '虐': [15, 100], '爆': [100, Infinity], '爆表': [100, Infinity]
 });
 
+const VALID_DIFFICULTY_RANKS = new Set(['淼', '水', '易', '普', '难', '虐', '爆表']);
+
+export function isValidDifficultyResult(score, rank, error = false) {
+  return !error && Number.isFinite(score) && VALID_DIFFICULTY_RANKS.has(rank);
+}
+
 export function isDifficultyMatch(score, difficulty) {
   const [low, high] = DIFFICULTY_RANGES[normalizeDifficulty(difficulty)];
   return score >= low && score < high;
@@ -45,7 +51,7 @@ export function chooseDifficultySegment(articles, length, difficulty, getRank, r
     if (excluded.has(`${article.title}:${start}`)) { attempts++; continue; }
     const text = chars.slice(start, start + length).join(''), [score, , rank, error] = getRank(text);
     attempts++;
-    if (error) continue;
+    if (!isValidDifficultyResult(score, rank, error)) continue;
     const candidate = { title: article.title, text, start, score, rank, attempts };
     if (!best || distance(score, range) < distance(best.score, range) ||
       (distance(score, range) === distance(best.score, range) && random() < 0.5)) best = candidate;

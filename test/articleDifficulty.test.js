@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseDifficultySegment, normalizeDifficulty } from '../dist/articleDifficulty.js';
+import { chooseDifficultySegment, isValidDifficultyResult, normalizeDifficulty } from '../dist/articleDifficulty.js';
 
 test('selects an exact difficulty candidate before falling back to nearest', () => {
   const articles = [{ title: '甲', text: 'abcdefghij' }, { title: '乙', text: 'klmnopqrst' }];
@@ -27,4 +27,11 @@ test('prefers nearby map records before random fallback', () => {
 test('can exclude recently used difficulty segments', () => {
   const result = chooseDifficultySegment([{ title: '甲', text: '甲'.repeat(300) }], 100, '水', () => [0.2, 0, '水', null], () => 0.5, () => 0, [], new Set(['甲:0']));
   assert.notEqual(result.start, 0);
+});
+
+test('rejects difficulty results without a valid rank', () => {
+  assert.equal(isValidDifficultyResult(-1, null, null), false);
+  assert.equal(isValidDifficultyResult(0.2, '水', null), true);
+  const result = chooseDifficultySegment([{ title: '无效', text: 'x'.repeat(10) }], 10, '淼', () => [-1, null, null, null], () => 0, () => 0);
+  assert.equal(result, null);
 });

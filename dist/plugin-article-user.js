@@ -6,7 +6,7 @@ import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagrap
 import { formatArticleMessage } from './articleMessage.js';
 import { articleRevision, compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
-import { DIFFICULTY_RANGES, isDifficultyMatch, normalizeDifficulty } from './articleDifficulty.js';
+import { DIFFICULTY_RANGES, isDifficultyMatch, isValidDifficultyResult, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
 import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
@@ -132,7 +132,7 @@ async function findDifficultySegment(titles, length, difficulty, mapRecords, exc
     const chars = [...body], actualStart = Math.max(0, Math.min(chars.length - length, start));
     if (actualStart < 0 || actualStart + length > chars.length || excluded.has(`${title}:${actualStart}`)) return null;
     const text = chars.slice(actualStart, actualStart + length).join(''), [score, , rank, error] = get_rank(text);
-    return error ? null : { title, text, body, start: actualStart, score, rank };
+    return isValidDifficultyResult(score, rank, error) ? { title, text, body, start: actualStart, score, rank } : null;
   };
   const sources = [
     ...candidateCacheGet(length, difficulty),

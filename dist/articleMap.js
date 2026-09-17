@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { ARTICLE_DIR, listArticles } from './articleStorage.js';
 import { readArticle } from './articleUser.js';
 import { get_rank } from './rank.js';
+import { isValidDifficultyResult } from './articleDifficulty.js';
 
 export const ARTICLE_MAP_PATH = path.join(ARTICLE_DIR, 'difficulty-map.json');
 export const ARTICLE_MAP_BLOCK_SIZE = 100;
@@ -18,11 +19,26 @@ function seededRandom(seed) {
   let state = Number.parseInt(seed.slice(0, 8), 16) || 1;
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 0x1_0000_0000; };
 }
-async function loadMap() {
+export function filterDifficultyMapRecords(records) {
+  return Array.isArray(records) ? records.filter(record => isValidDifficultyResult(record?.score, record?.rank)) : [];
+}
+async function loadRawMap() {
   try { return JSON.parse(await fs.readFile(ARTICLE_MAP_PATH, 'utf8')); }
   catch (err) { if (err.code === 'ENOENT') return { records: [] }; throw err; }
 }
+async function loadMap() {
+  const map = await loadRawMap();
+  return { ...map, records: filterDifficultyMapRecords(map.records) };
+}
 export async function readDifficultyMap() { return loadMap(); }
+
+export async function sanitizeDifficultyMap() {
+  const map = await loadRawMap();
+  const records = filterDifficultyMapRecords(map.records);
+  const removed = (Array.isArray(map.records) ? map.records.length : 0) - records.length;
+  if (removed) await writeMap({ ...map, records });
+  return { removed, remaining: records.length };
+}
 
 export async function renameDifficultyMapTitle(oldTitle, newTitle) {
   const map = await loadMap();
@@ -36,6 +52,7 @@ export async function renameDifficultyMapTitle(oldTitle, newTitle) {
   return changed;
 }
 async function writeMap(map) {
+  map = { ...map, records: filterDifficultyMapRecords(map.records) };
   await fs.mkdir(path.dirname(ARTICLE_MAP_PATH), { recursive: true });
   const temporary = `${ARTICLE_MAP_PATH}.${process.pid}.${Date.now()}.tmp`;
   try { await fs.writeFile(temporary, JSON.stringify(map), { flag: 'wx' }); await fs.rename(temporary, ARTICLE_MAP_PATH); }
@@ -80,7 +97,7 @@ export async function syncDifficultyMap(onProgress = () => {}) {
           const actualStart = Math.min(maxStart, start + Math.floor(random() * Math.min(ARTICLE_MAP_BLOCK_SIZE, Math.max(1, maxStart - start + 1))));
           const text = chars.slice(actualStart, actualStart + ARTICLE_MAP_BLOCK_SIZE).join('');
           const [score, , rank, error] = get_rank(text);
-          if (!error && text.length) records.push({ title, revision, start: actualStart, length: [...text].length, score, rank });
+          if (text.length && isValidDifficultyResult(score, rank, error)) records.push({ title, revision, start: actualStart, length: [...text].length, score, rank });
         }
         task.changed++;
       }
