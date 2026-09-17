@@ -9,7 +9,7 @@ import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
+import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
 import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
 import { renameDifficultyMapTitle } from './articleMap.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
@@ -47,6 +47,27 @@ const MAX_ARCHIVE_BYTES = 512 * 1024 ** 2;
 const MAX_ARCHIVE_FILES = 20_000;
 const MAX_ARCHIVE_TEXT_BYTES = 2 * 1024 ** 3;
 function fileSegment(message) { return message?.find(x => x?.type === 'file') || null; }
+
+function createBatchProgressReporter(e) {
+  let lastSentAt = 0;
+  let lastProcessed = -1;
+  let lastPhase = null;
+  return async ({ phase, processed = 0, total = 0, success = 0, skipped = 0, force = false }) => {
+    const now = Date.now();
+    if (phase !== lastPhase) force = true;
+    if (!force && processed !== total && processed - lastProcessed < 500 && now - lastSentAt < 30_000) return;
+    lastSentAt = now;
+    lastProcessed = processed;
+    lastPhase = phase;
+    let text;
+    if (phase === '解压') text = `批量上传：压缩包已解压，共 ${total} 个文件，开始校验。`;
+    else if (phase === '校验') text = `批量上传校验中：已检查 ${processed}/${total} 个文件，合格 ${success} 篇，跳过 ${skipped} 个。`;
+    else if (phase === '上传') text = `批量上传进行中：已处理 ${processed}/${total} 个文件，成功 ${success} 篇，跳过 ${skipped} 个。`;
+    else text = `批量上传：${phase}`;
+    try { await send(e, text); }
+    catch (err) { console.error('[plugin-article] batch progress reply failed', { ...articleEventContext(e), error: err?.message || String(err) }); }
+  };
+}
 
 async function renameArticleReferences(oldTitle, newTitle) {
   return runMysqlTransaction(() => mysql.createConnection(databaseConfig), async query => {
@@ -98,18 +119,24 @@ async function walkFiles(directory) {
   return result;
 }
 
-async function batchUpload(category, archive) {
+async function batchUpload(category, archive, onProgress = async () => {}) {
   const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'qqbot-article-'));
   try {
     await compressing.zip.uncompress(archive.buffer, temporary);
     const files = await walkFiles(temporary);
     if (files.length > MAX_ARCHIVE_FILES) throw new Error(`压缩包内文件不能超过 ${MAX_ARCHIVE_FILES} 个。`);
+    await onProgress({ phase: '解压', total: files.length, force: true });
     const entries = [], skipped = [];
     const titles = new Set();
     let totalBytes = 0;
-    for (const file of files) {
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
       const relative = path.relative(temporary, file);
-      if (!file.toLowerCase().endsWith('.txt')) { skipped.push({ file: relative, reason: '不是 txt 文件' }); continue; }
+      if (!file.toLowerCase().endsWith('.txt')) {
+        skipped.push({ file: relative, reason: '不是 txt 文件' });
+        await onProgress({ phase: '校验', processed: index + 1, total: files.length, success: entries.length, skipped: skipped.length });
+        continue;
+      }
       let title, buffer;
       try {
         title = validateArticleTitle(path.basename(file, path.extname(file)));
@@ -118,22 +145,26 @@ async function batchUpload(category, archive) {
         totalBytes += stat.size;
         if (totalBytes > MAX_ARCHIVE_TEXT_BYTES) throw new Error('解压后的正文总大小超过 2 GiB');
         buffer = await fsp.readFile(file);
-        normalizeArticleText(buffer);
+        const text = normalizeArticleText(buffer);
+        titles.add(title);
+        entries.push({ title, text });
       } catch (err) {
         skipped.push({ file: relative, reason: err.message });
-        continue;
       }
-      titles.add(title);
-      entries.push({ title, buffer });
+      await onProgress({ phase: '校验', processed: index + 1, total: files.length, success: entries.length, skipped: skipped.length });
     }
     if (!entries.length) throw new Error('压缩包中没有 txt 文件。');
+    const saveBatchArticle = await createArticleBatchWriter();
+    const validationSkipped = skipped.length;
     const results = [];
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
       try {
-        const result = await saveArticle(entry.title, entry.buffer);
+        const result = await saveBatchArticle(entry.title, entry.text);
         await addArticleCategory(category, entry.title);
         results.push(result);
       } catch (err) { skipped.push({ file: `${entry.title}.txt`, reason: err.message }); }
+      await onProgress({ phase: '上传', processed: validationSkipped + index + 1, total: files.length, success: results.length, skipped: skipped.length });
     }
     return { results, skipped };
   } finally { await fsp.rm(temporary, { recursive: true, force: true }).catch(() => {}); }
@@ -200,7 +231,9 @@ async function handleAdmin(e, command) {
   if (command.action === 'batch-upload') {
     if (args.length !== 1) throw new Error('格式：-管 批量传 <分类>，请附加 zip 压缩包。');
     const category = validateCategoryName(args[0]);
-    const { results, skipped } = await batchUpload(category, await findUploadFile(e, '.zip'));
+    await send(e, '批量上传已开始，正在下载压缩包……');
+    const reporter = createBatchProgressReporter(e);
+    const { results, skipped } = await batchUpload(category, await findUploadFile(e, '.zip'), reporter);
     if (!results.length) throw new Error(`压缩包中没有可上传的 txt 文件${skipped.length ? `：${skipped[0].reason}` : ''}`);
     const details = skipped.length ? `\n已跳过 ${skipped.length} 个文件：\n${skipped.slice(0, 20).map(item => `${item.file}（${item.reason}）`).join('\n')}${skipped.length > 20 ? '\n其余失败项已省略。' : ''}` : '';
     return send(e, `批量上传完成：成功 ${results.length} 篇，已加入分类“${category}”；跳过 ${skipped.length} 个文件。${details}`);

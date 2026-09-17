@@ -154,23 +154,50 @@ export function listArticles() {
     .map(entry => entry.name.slice(0, -4)).sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
-export async function saveArticle(title, source, explicitEncoding) {
+async function writeArticle(title, text, state = null) {
   title = validateArticleTitle(title);
-  const buffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
-  await fsp.mkdir(ARTICLE_TEXT_DIR, { recursive: true });
-  const text = normalizeArticleText(buffer, explicitEncoding);
   const output = Buffer.from(text, 'utf8');
-  const current = fs.existsSync(articlePath(title)) ? fs.statSync(articlePath(title)).size : 0;
-  const total = listArticles().reduce((sum, item) => sum + fs.statSync(articlePath(item)).size, 0) - current + output.length;
+  const target = articlePath(title);
+  let current = 0;
+  if (state) {
+    current = state.sizes.get(title) || 0;
+  } else if (fs.existsSync(target)) {
+    current = fs.statSync(target).size;
+  }
+  const total = state ? state.totalBytes - current + output.length : listArticles().reduce((sum, item) => sum + fs.statSync(articlePath(item)).size, 0) - current + output.length;
   if (total > ARTICLE_MAX_TOTAL_BYTES) throw new Error('文章总容量不能超过 10 GiB。');
-  if (diskFreeBytes(ARTICLE_TEXT_DIR) - output.length < 10 * 1024 ** 3) throw new Error('磁盘可用空间不足 10 GiB，未保存文章。');
+  if ((!state || state.writes % 256 === 0) && diskFreeBytes(ARTICLE_TEXT_DIR) - output.length < 10 * 1024 ** 3) throw new Error('磁盘可用空间不足 10 GiB，未保存文章。');
   const temporary = path.join(ARTICLE_TEXT_DIR, `.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`);
   try {
     await fsp.writeFile(temporary, output, { flag: 'wx' });
-    await fsp.rename(temporary, articlePath(title));
+    await fsp.rename(temporary, target);
   } finally { await fsp.rm(temporary, { force: true }).catch(() => {}); }
+  if (state) {
+    state.totalBytes = total;
+    state.sizes.set(title, output.length);
+    state.writes++;
+  }
   invalidateArticleView(title);
   return { title, chars: [...compactArticleText(text)].length, bytes: output.length, sha256: crypto.createHash('sha256').update(output).digest('hex') };
+}
+
+export async function saveArticle(title, source, explicitEncoding) {
+  const buffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
+  await fsp.mkdir(ARTICLE_TEXT_DIR, { recursive: true });
+  return writeArticle(title, normalizeArticleText(buffer, explicitEncoding));
+}
+
+export async function createArticleBatchWriter() {
+  await fsp.mkdir(ARTICLE_TEXT_DIR, { recursive: true });
+  const sizes = new Map();
+  let totalBytes = 0;
+  for (const title of listArticles()) {
+    const size = fs.statSync(articlePath(title)).size;
+    sizes.set(title, size);
+    totalBytes += size;
+  }
+  const state = { sizes, totalBytes, writes: 0 };
+  return async (title, normalizedText) => writeArticle(title, normalizedText, state);
 }
 
 export async function replaceArticleRange(title, start, end, pattern, replacement) {
