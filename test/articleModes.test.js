@@ -19,6 +19,7 @@ test('supports ordered tail, random paragraphs, and unique random indexes', () =
 
 test('random characters can use an inclusive 1-based range while repeating character values', () => {
   assert.deepEqual(parseRandomRange(['200', '文章', '1000-5000']), { args: ['200', '文章'], range: { start: 1000, end: 5000 } });
+  assert.deepEqual(parseRandomRange(['200', '文章', '1000-5000', '|', '速度>=100']), { args: ['200', '文章', '|', '速度>=100'], range: { start: 1000, end: 5000 } });
   const result = randomCharacters([... 'aabc'], 3, () => 0, 0, 4);
   assert.equal(new Set(result.indexes).size, 3);
   assert.equal(result.text, 'aab');

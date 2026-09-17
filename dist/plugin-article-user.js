@@ -80,7 +80,7 @@ async function articleMode(e, mode, args) {
   const output = formatArticleMessage(segment.text, { title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   await saveLastArticleConfig(consql, userId(e), { mode, length: parsed.length, title, condition, ...(randomArgs.range ? { rangeStart: randomArgs.range.start, rangeEnd: randomArgs.range.end } : {}) });
-  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, lastMessage: output });
+  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, rangeStart: randomArgs.range?.start ?? null, rangeEnd: randomArgs.range?.end ?? null, startPosition: mode === 'ordered' ? (await getProgress(consql, userId(e), title)) : null, nextPosition: segment.nextPosition ?? null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, lastMessage: output });
   return send(e, output);
 }
 
@@ -168,6 +168,7 @@ async function continueSession(e, session, force = false) {
   if (session.mode === 'ordered') await setProgress(consql, userId(e), session.title, session.nextPosition);
   if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)], session.conditionText);
   const args = [String(session.length), session.title];
+  if (session.mode === 'characters' && session.rangeStart != null && session.rangeEnd != null) args.push(`${session.rangeStart}-${session.rangeEnd}`);
   if (session.conditionText) args.push('|', session.conditionText);
   return articleMode(e, session.mode, args);
 }

@@ -18,12 +18,16 @@ export function randomParagraph(chars, length, random = Math.random) {
 
 export function parseRandomRange(args) {
   const values = [...(args || [])];
-  const token = values.at(-1) || '';
-  const match = token.match(/^(?:范围=)?(\d+)[~-](\d+)$/u) || token.match(/^(?:范围=)?(\d+)至(\d+)$/u);
+  let index = -1, match = null;
+  for (let i = values.length - 1; i >= 0; i--) {
+    const candidate = values[i];
+    const found = candidate.match(/^(?:范围=)?(\d+)[~-](\d+)$/u) || candidate.match(/^(?:范围=)?(\d+)至(\d+)$/u);
+    if (found) { index = i; match = found; break; }
+  }
   if (!match) return { args: values, range: null };
   const start = Number(match[1]), end = Number(match[2]);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) throw new Error('乱序下标范围必须是正整数起点和不小于起点的终点。');
-  values.pop();
+  values.splice(index, 1);
   return { args: values, range: { start, end } };
 }
 
