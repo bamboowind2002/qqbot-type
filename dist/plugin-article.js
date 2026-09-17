@@ -53,29 +53,38 @@ async function batchUpload(category, archive) {
     await compressing.zip.uncompress(archive.buffer, temporary);
     const files = await walkFiles(temporary);
     if (files.length > MAX_ARCHIVE_FILES) throw new Error(`压缩包内文件不能超过 ${MAX_ARCHIVE_FILES} 个。`);
-    const entries = [];
+    const entries = [], skipped = [];
     const titles = new Set();
     let totalBytes = 0;
     for (const file of files) {
-      if (!file.toLowerCase().endsWith('.txt')) throw new Error(`压缩包中包含非 txt 文件：${path.relative(temporary, file)}`);
-      const title = validateArticleTitle(path.basename(file, path.extname(file)));
-      if (titles.has(title)) throw new Error(`压缩包中存在重复文章标题：“${title}”。`);
+      const relative = path.relative(temporary, file);
+      if (!file.toLowerCase().endsWith('.txt')) { skipped.push({ file: relative, reason: '不是 txt 文件' }); continue; }
+      let title, buffer;
+      try {
+        title = validateArticleTitle(path.basename(file, path.extname(file)));
+        if (titles.has(title)) throw new Error(`清理标题后与其他文件重复：“${title}”`);
+        const stat = await fsp.stat(file);
+        totalBytes += stat.size;
+        if (totalBytes > MAX_ARCHIVE_TEXT_BYTES) throw new Error('解压后的正文总大小超过 2 GiB');
+        buffer = await fsp.readFile(file);
+        normalizeArticleText(buffer);
+      } catch (err) {
+        skipped.push({ file: relative, reason: err.message });
+        continue;
+      }
       titles.add(title);
-      const stat = await fsp.stat(file);
-      totalBytes += stat.size;
-      if (totalBytes > MAX_ARCHIVE_TEXT_BYTES) throw new Error('压缩包解压后的正文总大小不能超过 2 GiB。');
-      const buffer = await fsp.readFile(file);
-      normalizeArticleText(buffer);
       entries.push({ title, buffer });
     }
     if (!entries.length) throw new Error('压缩包中没有 txt 文件。');
     const results = [];
     for (const entry of entries) {
-      const result = await saveArticle(entry.title, entry.buffer);
-      await addArticleCategory(category, entry.title);
-      results.push(result);
+      try {
+        const result = await saveArticle(entry.title, entry.buffer);
+        await addArticleCategory(category, entry.title);
+        results.push(result);
+      } catch (err) { skipped.push({ file: `${entry.title}.txt`, reason: err.message }); }
     }
-    return results;
+    return { results, skipped };
   } finally { await fsp.rm(temporary, { recursive: true, force: true }).catch(() => {}); }
 }
 
@@ -117,8 +126,10 @@ async function handleAdmin(e, command) {
   if (command.action === 'batch-upload') {
     if (args.length !== 1) throw new Error('格式：-管 批量传 <分类>，请附加 zip 压缩包。');
     const category = validateCategoryName(args[0]);
-    const results = await batchUpload(category, await findUploadFile(e, '.zip'));
-    return send(e, `批量上传成功：${results.length} 篇文章，已全部加入分类“${category}”。`);
+    const { results, skipped } = await batchUpload(category, await findUploadFile(e, '.zip'));
+    if (!results.length) throw new Error(`压缩包中没有可上传的 txt 文件${skipped.length ? `：${skipped[0].reason}` : ''}`);
+    const details = skipped.length ? `\n已跳过 ${skipped.length} 个文件：\n${skipped.slice(0, 20).map(item => `${item.file}（${item.reason}）`).join('\n')}${skipped.length > 20 ? '\n其余失败项已省略。' : ''}` : '';
+    return send(e, `批量上传完成：成功 ${results.length} 篇，已加入分类“${category}”；跳过 ${skipped.length} 个文件。${details}`);
   }
   if (command.action === 'replace') {
     if (args.length < 3) throw new Error('格式：-管 改 <起点> <终点> <文章标题>，下一行填写正则表达式。');
