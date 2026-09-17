@@ -43,6 +43,9 @@ async function progress(e, args) {
     position = match[1] === '+' ? oldPosition + value : match[1] === '-' ? oldPosition - value : value;
     position = clampProgress(position, length);
     await setProgress(consql, userId(e), title, position);
+    // A manual seek supersedes the old in-memory session. Otherwise -发 or
+    // -下 could reuse its stale message/nextPosition and appear to rewind.
+    closeArticleSession(sessionKey(e));
   }
   const percent = length ? (position * 100 / length).toFixed(2) : '100.00';
   return send(e, `文章：${title}\n进度：${position}/${length} 字（${percent}%）`);
