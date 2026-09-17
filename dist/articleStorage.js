@@ -16,7 +16,7 @@ const ENCODINGS = new Map([
 ]);
 
 export function validateArticleTitle(title) {
-  title = String(title ?? '').trim();
+  title = String(title ?? '').replace(/\p{White_Space}/gu, '');
   if (!title || title === '.' || title === '..') throw new Error('文章标题不能为空。');
   if ([...title].length > 255) throw new Error('文章标题不能超过 255 个字符。');
   if (/[\\/\u0000-\u001f\u007f]/u.test(title)) throw new Error('文章标题不能包含路径分隔符或控制字符。');
