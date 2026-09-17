@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseScore, compileScoreCondition, parseMetricNumber } from '../dist/articleSession.js';
+import { articleRevision, parseScore, compileScoreCondition, parseMetricNumber } from '../dist/articleSession.js';
 
 test('parses score metrics, percentages, and time as seconds', () => {
   const score = parseScore('第45550段 速度166.73 击键6.59 键准82.15% 字数100 时间00:35.987');
@@ -22,4 +22,10 @@ test('empty condition is unconditional and malformed conditions fail early', () 
   assert.equal(compileScoreCondition('')({}), true);
   assert.throws(() => compileScoreCondition('速度>'), /格式/);
   assert.throws(() => compileScoreCondition('速度>=1 foo'), /无法识别|格式/);
+});
+
+test('article revisions detect content and line-break changes', () => {
+  assert.equal(articleRevision('甲\n乙'), articleRevision('甲\n乙'));
+  assert.notEqual(articleRevision('甲\n乙'), articleRevision('甲乙'));
+  assert.notEqual(articleRevision('甲乙'), articleRevision('甲丙'));
 });

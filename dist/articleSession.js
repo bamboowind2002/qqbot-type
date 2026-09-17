@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 const sessions = new Map();
 const TTL = 60 * 60 * 1000;
 
@@ -21,6 +23,10 @@ export function openArticleSession(key, value) {
 }
 
 export function touchArticleSession(session) { session.expires = Date.now() + TTL; return session; }
+
+export function articleRevision(text) {
+  return crypto.createHash('sha256').update(String(text ?? '')).digest('hex');
+}
 
 export function parseScore(text) {
   text = String(text ?? '');

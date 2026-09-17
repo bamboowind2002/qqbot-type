@@ -4,13 +4,12 @@ import { ARTICLE_PREFIX, parseArticleCommand, extractDirectArticleText } from '.
 import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, getProgressState, setProgress, saveOrderedProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomLines } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
-import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
+import { articleRevision, compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { DIFFICULTY_RANGES, isDifficultyMatch, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
 import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
-import crypto from 'node:crypto';
 import { listArticles, readArticleViews } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 
@@ -31,7 +30,7 @@ async function deliverOrderedSegment(e, { title, body, start, end, length, condi
   openArticleSession(sessionKey(e), {
     title, mode: 'ordered', length, startPosition: start, nextPosition: end,
     segment: number, condition: compileScoreCondition(conditionText), conditionText,
-    body, lastMessage: output
+    body, articleRevision: articleRevision(body), lastMessage: output
   });
   return output;
 }
@@ -119,7 +118,7 @@ async function articleMode(e, mode, args) {
   const output = formatArticleMessage(segment.text, { title: displayTitle, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   await saveLastArticleConfig(consql, userId(e), { mode, length: parsed.length, title, condition, ...(randomArgs.range ? { rangeStart: randomArgs.range.start, rangeEnd: randomArgs.range.end } : {}) });
-  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, rangeStart: randomArgs.range?.start ?? null, rangeEnd: randomArgs.range?.end ?? null, startPosition: null, nextPosition: null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, lastMessage: output });
+  openArticleSession(sessionKey(e), { title, mode, length: parsed.length, rangeStart: randomArgs.range?.start ?? null, rangeEnd: randomArgs.range?.end ?? null, startPosition: null, nextPosition: null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: body, articleRevision: articleRevision(mode === 'characters' ? view.text : body), lastMessage: output });
   return send(e, output);
 }
 
@@ -174,7 +173,7 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   let result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded);
   if (!result && excluded.size) { excluded = new Set(); result = await findDifficultySegment(titles, parsed.length, normalized, map.records || [], excluded); }
   if (!result) throw new Error('没有找到可用段落。');
-  const revision = crypto.createHash('sha256').update(result.body).digest('hex');
+  const revision = articleRevision(result.body);
   candidateCachePut({ length: parsed.length, difficulty, title: result.title, revision, start: result.start, score: result.score });
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
@@ -182,7 +181,7 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const recentSegments = [...recent, { title: result.title, start: result.start }].slice(-20);
   const condition = String(persistedCondition || '').trim();
   await saveLastArticleConfig(consql, userId(e), { mode: 'difficulty', length: parsed.length, difficulty: normalized, condition });
-  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalized, length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: result.text, recentSegments, lastMessage: output });
+  openArticleSession(sessionKey(e), { title: result.title, mode: 'difficulty', difficulty: normalized, length: parsed.length, startPosition: null, nextPosition: null, segment: number, condition: compileScoreCondition(condition), conditionText: condition, body: result.text, articleRevision: revision, recentSegments, lastMessage: output });
   return send(e, output);
 }
 
@@ -191,7 +190,7 @@ async function repeatOrdered(e, title, length, conditionText = '', session = nul
     const body = await readArticle(title), articleLength = [...body].length;
     const state = await getProgressState(consql, userId(e), title);
     const repeat = resolveOrderedRepeat(state, articleLength);
-    if (session?.lastMessage && isOrderedSessionCurrent(session, state, articleLength)) {
+    if (session?.lastMessage && session.articleRevision === articleRevision(body) && isOrderedSessionCurrent(session, state, articleLength)) {
       touchArticleSession(session);
       return send(e, session.lastMessage);
     }
@@ -222,8 +221,13 @@ async function repeatLast(e) {
   const session = getArticleSession(sessionKey(e));
   if (session?.lastMessage) {
     if (session.mode === 'ordered') return repeatOrdered(e, session.title, session.length, session.conditionText, session);
-    touchArticleSession(session);
-    return send(e, session.lastMessage);
+    const view = await readArticleViews(session.title);
+    const source = session.mode === 'characters' ? view.text : view.compactText;
+    if (session.articleRevision === articleRevision(source)) {
+      touchArticleSession(session);
+      return send(e, session.lastMessage);
+    }
+    return continueSession(e, session);
   }
   return resumeLastConfig(e, true);
 }
