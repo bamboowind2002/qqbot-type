@@ -19,16 +19,26 @@ function fileSegment(message) { return message?.find(x => x?.type === 'file') ||
 
 async function findUploadFile(e, extension) {
   let file = fileSegment(e.message);
+  let sourceType = e.message_type;
   if (!file) {
     const reply = e.message?.find(x => x?.type === 'reply');
-    if (reply) file = fileSegment((await bot.get_msg({ message_id: reply.data.id }))?.message);
+    if (reply) {
+      const source = await bot.get_msg({ message_id: reply.data.id });
+      file = fileSegment(source?.message);
+      sourceType = source?.message_type || sourceType;
+    }
   }
   if (!file) throw new Error('请在消息中附加 txt 文件，或引用包含 txt 文件的消息。');
   const filename = String(file.data?.file || '');
   if (!filename.toLowerCase().endsWith(extension)) throw new Error(`上传文件必须是 ${extension}。`);
-  const info = await bot.get_file({ file_id: file.data?.file_id });
-  if (!info?.base64) throw new Error('无法下载文章文件。');
-  const buffer = Buffer.from(info.base64, 'base64');
+  const fileSize = Number(file.data?.file_size);
+  if (Number.isFinite(fileSize) && fileSize > MAX_ARCHIVE_BYTES) throw new Error('上传文件不能超过 512 MiB。');
+  const getFileUrl = sourceType === 'group' ? bot.get_group_file_url.bind(bot) : bot.get_private_file_url.bind(bot);
+  const info = await getFileUrl({ file_id: file.data?.file_id });
+  if (!info?.url) throw new Error('无法获取文章文件下载地址。');
+  const response = await fetch(info.url);
+  if (!response.ok) throw new Error(`文章文件下载失败（HTTP ${response.status}）。`);
+  const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.length > MAX_ARCHIVE_BYTES) throw new Error('上传文件不能超过 512 MiB。');
   return { filename, buffer };
 }
