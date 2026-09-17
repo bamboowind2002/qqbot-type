@@ -232,14 +232,17 @@ bot.on('message', async e => {
     const command = parseArticleCommand(directText);
     console.log('[plugin-article] message received', { ...articleEventContext(e), text: directText.slice(0, 200), command });
     if (!command) return;
-    if (command.action === 'category-list') return sendCategoryList(e);
-    if (command.action === 'help') return send(e, ARTICLE_HELP);
+    if (command.action === 'category-list') return await sendCategoryList(e);
+    if (command.action === 'help') return await send(e, ARTICLE_HELP);
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
     if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return await handleAdmin(e, command);
   } catch (err) {
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.error('[plugin-article] command failed', { ...articleEventContext(e), isAdmin, error: err?.message || String(err), stack: err?.stack });
-    if (isAdmin) await send(e, `发文管理失败：${err.message}`);
+    if (isAdmin) {
+      try { await send(e, `发文管理失败：${err.message}`); }
+      catch (replyError) { console.error('[plugin-article] error reply failed', { ...articleEventContext(e), error: replyError?.message || String(replyError) }); }
+    }
   }
 });

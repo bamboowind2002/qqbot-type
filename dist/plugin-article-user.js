@@ -304,31 +304,34 @@ bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
-    if (command.action === '发') return repeatLast(e);
-    if (command.action === '条件') return conditionStatus(e);
-    if (command.action === 'list') return list(e, command);
+    if (command.action === '发') return await repeatLast(e);
+    if (command.action === '条件') return await conditionStatus(e);
+    if (command.action === 'list') return await list(e, command);
     if (command.action === '选' || command.action === '选择文章') {
       if (!command.args?.length) throw new Error('格式：-选 <文章标题>');
-      return send(e, `已选择文章“${await selectArticle(consql, userId(e), command.args.join(' '))}”。`);
+      return await send(e, `已选择文章“${await selectArticle(consql, userId(e), command.args.join(' '))}”。`);
     }
-    if (command.action === '进' || command.action === '文章进度') return progress(e, command.args || []);
+    if (command.action === '进' || command.action === '文章进度') return await progress(e, command.args || []);
     if (command.action === '搜' || command.action === '文内搜索') {
       if (!command.args?.length) throw new Error('格式：-搜 <关键词> [页码] [于 <文章标题>]');
-      return search(e, command.args);
+      return await search(e, command.args);
     }
-    if (command.action === '顺' || command.action === '顺序发文') return articleMode(e, 'ordered', command.args);
-    if (command.action === '随' || command.action === '随机段落发文') return articleMode(e, 'paragraph', command.args);
-    if (command.action === '乱' || command.action === '随机选字发文') return articleMode(e, 'characters', command.args);
+    if (command.action === '顺' || command.action === '顺序发文') return await articleMode(e, 'ordered', command.args);
+    if (command.action === '随' || command.action === '随机段落发文') return await articleMode(e, 'paragraph', command.args);
+    if (command.action === '乱' || command.action === '随机选字发文') return await articleMode(e, 'characters', command.args);
     if (command.action === '难度发文') {
       if (!command.args?.length) throw new Error('格式：-难度发文 <淼|水|易|普|难|虐|爆表> [字数]');
       const difficulty = command.args[0];
-      return difficultyMode(e, difficulty, command.args.slice(1));
+      return await difficultyMode(e, difficulty, command.args.slice(1));
     }
     const difficultyAliases = { '淼': '淼', '水': '水', '易': '易', '普': '普', '难': '难', '虐': '虐', '爆': '爆表' };
-    if (difficultyAliases[command.action]) return difficultyMode(e, difficultyAliases[command.action], command.args);
-    if (['上', '上一段', '下', '下一段', '停', '结束发文', '自', '设置自动续段'].includes(command.action)) return handleSessionCommand(e, command);
+    if (difficultyAliases[command.action]) return await difficultyMode(e, difficultyAliases[command.action], command.args);
+    if (['上', '上一段', '下', '下一段', '停', '结束发文', '自', '设置自动续段'].includes(command.action)) return await handleSessionCommand(e, command);
     return;
-  } catch (err) { send(e, `发文操作失败：${err.message}`); }
+  } catch (err) {
+    try { await send(e, `发文操作失败：${err.message}`); }
+    catch (replyError) { console.error('发送发文错误回复失败：', replyError?.message || replyError); }
+  }
 });
 
 bot.on('message', async e => {
