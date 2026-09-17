@@ -10,6 +10,7 @@ export function parseArticleCommand(raw) {
   if (!body) return { action: 'help' };
   const [head, ...rest] = body.split(/\s+/);
   if (head === '文' || head === '文章列表') {
+    if (rest[0] === '分类列表') return { action: 'category-list', args: [] };
     let category = null;
     let showLength = rest[0] === '长度' || rest[0] === '字数';
     if (showLength) rest.shift();
@@ -44,6 +45,7 @@ export const ARTICLE_HELP = `发文命令
 -文 长度 [关键词] [页码]：查看文章列表及紧凑正文长度
 -文 分类 <分类名> [关键词] [页码]：按分类查看文章
 -文 分类 <分类名> 长度 [关键词] [页码]：查看分类文章及长度
+ -文 分类列表：查看所有分类名称
 -选 <标题>：选择当前文章
 -进 [+/−/=数字]：查看或调整顺序发文进度
 -顺 [字数] [标题]：顺序发文
@@ -69,7 +71,7 @@ export const ARTICLE_HELP = `发文命令
 -管 分类 添加/删除 <分类名> <标题>：维护分类软链接
 -管 分类 重命名 <旧分类名> <新分类名>：重命名分类
 -管 重命名 <旧标题> <新标题>：重命名文章（“文章重命名”同义）
--管 分类 列表：查看分类
+-管 分类 列表：查看分类（兼容旧命令，普通用户也可用）
 -管 索：同步难度地图
 -管 状：查看难度地图同步状态
 -管 取消：取消难度地图同步`;

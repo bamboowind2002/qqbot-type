@@ -37,6 +37,12 @@ async function send(e, value) {
     throw err;
   }
 }
+
+async function sendCategoryList(e) {
+  const categories = categoryStatus().map(row => row.category);
+  console.log('[plugin-article] category names prepared', { ...articleEventContext(e), categories: categories.length });
+  return send(e, categories.length ? `当前分类：\n${categories.join('\n')}` : '暂无分类。');
+}
 const MAX_ARCHIVE_BYTES = 512 * 1024 ** 2;
 const MAX_ARCHIVE_FILES = 20_000;
 const MAX_ARCHIVE_TEXT_BYTES = 2 * 1024 ** 3;
@@ -134,15 +140,13 @@ async function batchUpload(category, archive) {
 }
 
 async function handleAdmin(e, command) {
-  if (!isArticleAdmin(e.sender?.user_id)) return;
+  if (!isArticleAdmin(e.sender?.user_id ?? e.user_id)) return;
   const args = command.args;
   if (command.action === 'admin-help') return send(e, ARTICLE_HELP);
   if (command.action === 'category-help') return send(e, '分类管理：-管 分类 添加/删除 <分类名> <文章标题>；-管 分类 重命名 <旧分类名> <新分类名>；-管 分类 列表');
   if (command.action === 'category-list') {
     if (args.length) throw new Error('格式：-管 分类 列表');
-    const rows = categoryStatus();
-    console.log('[plugin-article] category list prepared', { ...articleEventContext(e), categories: rows.length, articles: rows.reduce((sum, row) => sum + row.titles.length, 0) });
-    return send(e, rows.length ? rows.map(row => `${row.category}（${row.titles.length}篇）${row.titles.length ? `\n${row.titles.join('\n')}` : ''}`).join('\n') : '暂无分类。');
+    return sendCategoryList(e);
   }
   if (command.action === 'category-rename') {
     if (args.length !== 2) throw new Error('格式：-管 分类 重命名 <旧分类名> <新分类名>');
@@ -228,6 +232,7 @@ bot.on('message', async e => {
     const command = parseArticleCommand(directText);
     console.log('[plugin-article] message received', { ...articleEventContext(e), text: directText.slice(0, 200), command });
     if (!command) return;
+    if (command.action === 'category-list') return sendCategoryList(e);
     if (command.action === 'help') return send(e, ARTICLE_HELP);
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
