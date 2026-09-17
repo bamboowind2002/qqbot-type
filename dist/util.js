@@ -18,18 +18,26 @@ export function get_reply(msg) {
     }
 }
 
-export async function get_file_buffer(file, messageType = null) {
+export async function get_file_buffer(file, messageType = null, groupId = null) {
     const fileId = file?.data?.file_id;
     if (!fileId) throw new Error('文件缺少 file_id。');
+    const groupFileUrl = async () => {
+        const numericGroupId = Number(groupId);
+        if (!Number.isSafeInteger(numericGroupId) || numericGroupId <= 0) {
+            throw new Error('群文件缺少 group_id。');
+        }
+        return bot.get_group_file_url({ group_id: numericGroupId, file_id: fileId });
+    };
+    const privateFileUrl = () => bot.get_private_file_url({ file_id: fileId });
     const methods = messageType === 'group'
-        ? [bot.get_group_file_url.bind(bot)]
+        ? [groupFileUrl]
         : messageType === 'private'
-            ? [bot.get_private_file_url.bind(bot)]
-            : [bot.get_private_file_url.bind(bot), bot.get_group_file_url.bind(bot)];
+            ? [privateFileUrl]
+            : [privateFileUrl, groupFileUrl];
     let lastError;
     for (const getUrl of methods) {
         try {
-            const info = await getUrl({ file_id: fileId });
+            const info = await getUrl();
             if (!info?.url) throw new Error('文件下载地址为空。');
             const response = await fetch(info.url);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -44,7 +52,7 @@ export async function get_file_buffer(file, messageType = null) {
  * @param {import('node-napcat-ts').Receive[keyof import('node-napcat-ts').Receive][]} msg 
  * @returns {Promise<string[]>}
  */
-export async function get_text_content_from_msg(msg, read_file=true, messageType=null) {
+export async function get_text_content_from_msg(msg, read_file=true, messageType=null, groupId=null) {
     let res = []
     // console.log(msg)
     for (let tmp of msg) {
@@ -62,7 +70,7 @@ export async function get_text_content_from_msg(msg, read_file=true, messageType
         } else if (tmp.type === 'reply') {
             try {
                 let reply = await bot.get_msg({ message_id: tmp.data.id })
-                res = res.concat(await get_text_content_from_msg(reply.message, read_file, reply.message_type))
+                res = res.concat(await get_text_content_from_msg(reply.message, read_file, reply.message_type, reply.group_id))
                 // res.push(`${await get_text_content_from_msg(reply.message)}`)
             } catch (e) {
                 res.push(`[引用]`)
@@ -76,7 +84,7 @@ export async function get_text_content_from_msg(msg, read_file=true, messageType
                 try {
                     let forward = await bot.get_forward_msg({ message_id: tmp.data.id })
                     for (let e of forward.messages) {
-                        res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type))
+                        res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type, e.group_id))
                         // res.push(`${await get_text_content_from_msg(e.message)}`)
                     }
                 } catch (e) {
@@ -85,7 +93,7 @@ export async function get_text_content_from_msg(msg, read_file=true, messageType
             } else {
                 let forward = tmp.data.content
                 for (let e of forward) {
-                    res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type))
+                    res = res.concat(await get_text_content_from_msg(e.message, read_file, e.message_type, e.group_id))
                     // res.push(`${await get_text_content_from_msg(e.message)}`)
                 }
             }
@@ -99,9 +107,10 @@ export async function get_text_content_from_msg(msg, read_file=true, messageType
                 res.push(`[文件]`)
             } else {
                 try {
-                    const buf = await get_file_buffer(tmp, messageType);
+                    const buf = await get_file_buffer(tmp, messageType, groupId);
                     res.push(buf.toString('utf-8'))
                 } catch (error) {
+                    console.warn('读取文件消息内容失败:', error.message || error);
                     res.push(`[文件]`)
                 }
             }

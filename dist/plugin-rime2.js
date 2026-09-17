@@ -376,7 +376,7 @@ bot.on("message", async e => {
             // }
 
             e.quick_action([Structs.text("上传中...")]);
-            let file_buffer = await get_file_buffer(msg.message[0], msg.message_type);
+            let file_buffer = await get_file_buffer(msg.message[0], msg.message_type, msg.group_id);
 
 
             if (fs.existsSync(`${RIME_SCHEME}/${name}`)) {

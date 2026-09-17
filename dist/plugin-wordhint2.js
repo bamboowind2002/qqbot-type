@@ -1118,7 +1118,7 @@ async function reply_query_ime(e) {
         return;
     let res = await bot.get_msg({ message_id: id });
 
-    query_ime(e, cmd, (await get_text_content_from_msg(res.message)).join('').trim())
+    query_ime(e, cmd, (await get_text_content_from_msg(res.message, true, res.message_type, res.group_id)).join('').trim())
 }
 
 bot.on('message', async e => {
@@ -1407,7 +1407,7 @@ bot.on('message', async e => {
 
         // bot.logger.warn(res)
 
-        let text = (await get_text_content_from_msg(res.message)).map(get_process).join('');
+        let text = (await get_text_content_from_msg(res.message, true, res.message_type, res.group_id)).map(get_process).join('');
         // let text = tmp_arr[0];
         // let is_huangshu = tmp_arr[1];
         for (let i = 0; i < cmds.length; i++) {
@@ -2576,7 +2576,7 @@ bot.on('message', async e => {
 
             // bot.logger.warn(res)
 
-            let text = (await get_text_content_from_msg(res.message)).join('');
+            let text = (await get_text_content_from_msg(res.message, true, res.message_type, res.group_id)).join('');
             terms = [text]
         } else {
             // 普通查询
