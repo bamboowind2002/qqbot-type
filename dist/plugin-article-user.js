@@ -207,10 +207,12 @@ async function handleSessionCommand(e, command) {
       if (!restored) throw new Error('无法恢复发文会话。');
       return continueSession(e, restored, true);
     }
+    if (session.mode === 'ordered' && session.nextPosition >= [...String(session.body || '')].length) throw new Error('已经是最后一段，无法下一段。');
     return continueSession(e, session, true);
   }
   if (command.action === '上' || command.action === '上一段') {
     if (!session || session.mode !== 'ordered') throw new Error('只有顺序发文支持回到上一段。');
+    if (session.startPosition <= 0) throw new Error('已经是第一段，无法上一段。');
     const position = Math.max(0, session.startPosition - session.length);
     await setProgress(consql, userId(e), session.title, position);
     closeArticleSession(key);
