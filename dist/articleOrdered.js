@@ -30,6 +30,12 @@ export function previousOrderedRange(state, articleLength) {
   return { start: Math.max(0, current.start - current.length), end: current.start, length: current.length };
 }
 
+export function resolveOrderedRepeat(state, articleLength) {
+  const range = storedOrderedRange(state, articleLength);
+  if (range) return { range, completed: false };
+  return { range: null, completed: state.position >= articleLength };
+}
+
 export function isOrderedSessionCurrent(session, state, articleLength) {
   const range = storedOrderedRange(state, articleLength);
   return Boolean(range && session?.mode === 'ordered' && session.startPosition === range.start && session.nextPosition === range.end);

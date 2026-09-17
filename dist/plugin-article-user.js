@@ -5,7 +5,7 @@ import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, se
 import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomLines } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
-import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, storedOrderedRange, withOrderedLock } from './articleOrdered.js';
+import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { DIFFICULTY_RANGES, isDifficultyMatch, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { readDifficultyMap } from './articleMap.js';
@@ -190,14 +190,14 @@ async function repeatOrdered(e, title, length, conditionText = '', session = nul
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
     const body = await readArticle(title), articleLength = [...body].length;
     const state = await getProgressState(consql, userId(e), title);
-    if (state.position >= articleLength) throw new Error('这篇文章已经发完了。');
+    const repeat = resolveOrderedRepeat(state, articleLength);
     if (session?.lastMessage && isOrderedSessionCurrent(session, state, articleLength)) {
       touchArticleSession(session);
       return send(e, session.lastMessage);
     }
     if (session) closeArticleSession(sessionKey(e));
-    const range = storedOrderedRange(state, articleLength);
-    if (range) return deliverOrderedSegment(e, { title, body, ...range, conditionText, persist: false });
+    if (repeat.range) return deliverOrderedSegment(e, { title, body, ...repeat.range, conditionText, persist: false });
+    if (repeat.completed) throw new Error('这篇文章已经发完了。');
     const segment = orderedSegment([...body], state.position, length);
     return deliverOrderedSegment(e, { title, body, start: state.position, end: segment.nextPosition, length, conditionText });
   });

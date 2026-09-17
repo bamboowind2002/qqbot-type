@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, storedOrderedRange, withOrderedLock } from '../dist/articleOrdered.js';
+import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, storedOrderedRange, withOrderedLock } from '../dist/articleOrdered.js';
 
 test('uses the persisted tail range when moving to the previous segment', () => {
   const tail = { position: 250, lastStart: 200, lastEnd: 250, lastLength: 100 };
@@ -16,6 +16,12 @@ test('rejects missing, manually shifted, and stale ordered ranges', () => {
   const state = { position: 200, lastStart: 100, lastEnd: 200, lastLength: 100 };
   assert.equal(isOrderedSessionCurrent({ mode: 'ordered', startPosition: 100, nextPosition: 200 }, state, 250), true);
   assert.equal(isOrderedSessionCurrent({ mode: 'ordered', startPosition: 0, nextPosition: 100 }, state, 250), false);
+});
+
+test('repeats a persisted final segment before treating the article as completed', () => {
+  const tail = { position: 250, lastStart: 200, lastEnd: 250, lastLength: 100 };
+  assert.deepEqual(resolveOrderedRepeat(tail, 250), { range: { start: 200, end: 250, length: 100 }, completed: false });
+  assert.deepEqual(resolveOrderedRepeat({ position: 250, lastStart: null, lastEnd: null, lastLength: null }, 250), { range: null, completed: true });
 });
 
 test('serializes ordered operations for the same user and article', async () => {
