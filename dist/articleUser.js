@@ -1,5 +1,4 @@
-import fs from 'node:fs/promises';
-import { articlePath, listArticles, validateArticleTitle } from './articleStorage.js';
+import { listArticles, validateArticleTitle, readArticleViews } from './articleStorage.js';
 
 function query(connection, sql, values = []) {
   return new Promise((resolve, reject) => connection.query(sql, values, (err, rows) => err ? reject(err) : resolve(rows)));
@@ -52,7 +51,9 @@ export async function setProgress(connection, qqid, title, position) {
   return position;
 }
 
-export async function readArticle(title) { return fs.readFile(articlePath(title), 'utf8'); }
+// Character-indexed features use the compact view so line-break edits never
+// shift progress, search positions, or difficulty-map starts.
+export async function readArticle(title) { return (await readArticleViews(title)).compactText; }
 
 export function clampProgress(position, length) {
   if (!Number.isSafeInteger(position)) throw new Error('进度必须是整数。');

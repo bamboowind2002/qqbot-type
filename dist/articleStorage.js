@@ -8,6 +8,8 @@ export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 
 export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
 
+const articleViewCache = new Map();
+
 const ENCODINGS = new Map([
   ['utf8', 'utf-8'], ['utf-8', 'utf-8'], ['utf16le', 'utf-16le'],
   ['utf-16le', 'utf-16le'], ['gb18030', 'gb18030'], ['gbk', 'gbk'], ['big5', 'big5']
@@ -41,11 +43,37 @@ export function detectArticleEncoding(buffer, explicit) {
 export function normalizeArticleText(buffer, explicitEncoding) {
   const encoding = detectArticleEncoding(buffer, explicitEncoding);
   let text = new TextDecoder(encoding, { fatal: false }).decode(buffer);
-  // TextDecoder leaves a BOM in some encodings; all Unicode whitespace is discarded.
-  text = text.replace(/^\uFEFF/u, '').replace(/\p{White_Space}/gu, '');
-  if (!text) throw new Error('文章正文不能为空。');
+  // TextDecoder leaves a BOM in some encodings.  Keep line breaks for the
+  // line-oriented random mode, while retaining the historical rule that
+  // other whitespace is ignored.
+  text = text.replace(/^\uFEFF/u, '').replace(/\r\n?/gu, '\n').replace(/[^\S\n]+/gu, '');
+  if (![...text].some(char => char !== '\n')) throw new Error('文章正文不能为空。');
   return text;
 }
+
+export function compactArticleText(text) {
+  return String(text).replace(/\n/gu, '');
+}
+
+export function splitArticleLines(text) {
+  return String(text).split('\n').filter(line => line.length > 0);
+}
+
+function articleView(text) {
+  return { text, lines: splitArticleLines(text), compactText: compactArticleText(text) };
+}
+
+export async function readArticleViews(title) {
+  const file = articlePath(title);
+  const stat = await fsp.stat(file);
+  const cached = articleViewCache.get(title);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.view;
+  const view = articleView(await fsp.readFile(file, 'utf8').then(buffer => normalizeArticleText(Buffer.from(buffer), 'utf-8')));
+  articleViewCache.set(title, { mtimeMs: stat.mtimeMs, size: stat.size, view });
+  return view;
+}
+
+export function invalidateArticleView(title) { articleViewCache.delete(String(title)); }
 
 function diskFreeBytes(directory) {
   try { return Number(fs.statfsSync(directory).bavail) * Number(fs.statfsSync(directory).bsize); }
@@ -74,7 +102,8 @@ export async function saveArticle(title, source, explicitEncoding) {
     await fsp.writeFile(temporary, output, { flag: 'wx' });
     await fsp.rename(temporary, articlePath(title));
   } finally { await fsp.rm(temporary, { force: true }).catch(() => {}); }
-  return { title, chars: [...text].length, bytes: output.length, sha256: crypto.createHash('sha256').update(output).digest('hex') };
+  invalidateArticleView(title);
+  return { title, chars: [...compactArticleText(text)].length, bytes: output.length, sha256: crypto.createHash('sha256').update(output).digest('hex') };
 }
 
 export async function replaceArticleRange(title, start, end, pattern, replacement) {
@@ -82,16 +111,25 @@ export async function replaceArticleRange(title, start, end, pattern, replacemen
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start + 1 > 10_000_000) throw new Error('替换区间必须是 1 至 10000000 个字符。');
   const old = await fsp.readFile(articlePath(title));
   const text = normalizeArticleText(old, 'utf-8');
-  const chars = [...text];
+  const chars = [...compactArticleText(text)];
   if (end > chars.length) throw new Error(`文章只有 ${chars.length} 个字符，区间超出范围。`);
   let regex; try { regex = new RegExp(pattern, 'gu'); } catch (err) { throw new Error(`正则表达式无效：${err.message}`); }
   const selected = chars.slice(start - 1, end).join('').replace(regex, replacement ?? '');
-  chars.splice(start - 1, end - start + 1, ...[...selected]);
-  return saveArticle(title, chars.join(''), 'utf-8');
+  const compactPositions = [];
+  for (let index = 0, compact = 0; index < [...text].length; index++) {
+    const char = [...text][index];
+    if (char !== '\n') { compactPositions[compact] = index; compact++; }
+  }
+  const rawChars = [...text];
+  const rawStart = compactPositions[start - 1];
+  const rawEnd = compactPositions[end - 1] + 1;
+  rawChars.splice(rawStart, rawEnd - rawStart, ...[...selected]);
+  return saveArticle(title, rawChars.join(''), 'utf-8');
 }
 
 export async function deleteArticle(title) {
   await fsp.rm(articlePath(title));
+  invalidateArticleView(title);
   const { removeArticleFromAllCategories } = await import('./articleCategories.js');
   await removeArticleFromAllCategories(title);
   return title;

@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeArticleText, validateArticleTitle } from '../dist/articleStorage.js';
+import { normalizeArticleText, compactArticleText, splitArticleLines, validateArticleTitle } from '../dist/articleStorage.js';
 import { parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from '../dist/articleCommands.js';
 import { formatArticleMessage } from '../dist/articleMessage.js';
 
-test('normalizes BOM, supported legacy encodings, and all Unicode whitespace', () => {
-  assert.equal(normalizeArticleText(Buffer.from('\ufeff 你\n 好\t', 'utf8')), '你好');
+test('normalizes BOM and whitespace while preserving line breaks', () => {
+  const text = normalizeArticleText(Buffer.from('\ufeff 你\n 好\t', 'utf8'));
+  assert.equal(text, '你\n好');
+  assert.equal(compactArticleText(text), '你好');
+  assert.deepEqual(splitArticleLines(text), ['你', '好']);
   assert.equal(normalizeArticleText(Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), 'gb18030'), '你好');
 });
 

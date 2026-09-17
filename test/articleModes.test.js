@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters } from '../dist/articleModes.js';
+import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters, randomLines } from '../dist/articleModes.js';
 
 test('parses remembered length and titles containing spaces', () => {
   assert.deepEqual(parseSegmentArguments(['200', '我的', '文章']), { length: 200, title: '我的 文章' });
@@ -23,4 +23,13 @@ test('random characters can use an inclusive 1-based range while repeating chara
   assert.equal(new Set(result.indexes).size, 3);
   assert.equal(result.text, 'aab');
   assert.throws(() => randomCharacters([... 'abcd'], 3, () => 0, 0, 2), /不足/);
+});
+
+test('random lines selects distinct line indexes and truncates the final line', () => {
+  const result = randomLines(['甲乙', '丙丁戊', '己庚'], 4, () => 0);
+  assert.equal(result.text.length, 4);
+  assert.equal(new Set(result.indexes).size, result.indexes.length);
+  assert.deepEqual(result.indexes, [0, 1]);
+  assert.equal(randomLines(['甲乙', '丙丁戊', '己庚'], 4, () => 0, 1, 3).text, '丙丁戊己');
+  assert.throws(() => randomLines(['甲', '乙'], 3), /不足/);
 });

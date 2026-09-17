@@ -37,3 +37,19 @@ export function randomCharacters(chars, length, random = Math.random, rangeStart
   }
   return { text: indexes.slice(0, length).map(index => chars[index]).join(''), indexes: indexes.slice(0, length) };
 }
+
+export function randomLines(lines, length, random = Math.random, rangeStart = 0, rangeEnd = lines.length) {
+  if (!Number.isInteger(rangeStart) || !Number.isInteger(rangeEnd) || rangeStart < 0 || rangeEnd > lines.length || rangeEnd <= rangeStart) throw new Error('乱序下标范围超出文章行数。');
+  if (lines.slice(rangeStart, rangeEnd).reduce((total, line) => total + [...line].length, 0) < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
+  const indexes = Array.from({ length: rangeEnd - rangeStart }, (_, index) => index + rangeStart);
+  const selected = [];
+  let total = 0;
+  while (total < length) {
+    const offset = selected.length + Math.floor(random() * (indexes.length - selected.length));
+    [indexes[selected.length], indexes[offset]] = [indexes[offset], indexes[selected.length]];
+    const index = indexes[selected.length];
+    selected.push(index);
+    total += [...lines[index]].length;
+  }
+  return { text: [...selected.map(index => lines[index]).join('')].slice(0, length).join(''), indexes: selected };
+}
