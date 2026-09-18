@@ -16,27 +16,37 @@ export async function withOrderedLock(key, task) {
 
 export function orderedLockKey(qqid, title) { return `${qqid}\0${title}`; }
 
-export function storedOrderedRange(state, articleLength) {
-  const start = state?.lastStart, end = state?.lastEnd, length = state?.lastLength;
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(length)) return null;
-  if (start < 0 || end <= start || end > articleLength || length < 1 || state.position !== end) return null;
-  return { start, end, length };
+export function orderedRangeAt(position, length, articleLength) {
+  if (!Number.isSafeInteger(position) || position < 0 || position >= articleLength) return null;
+  if (!Number.isSafeInteger(length) || length < 1) return null;
+  return { start: position, end: Math.min(articleLength, position + length), length };
 }
 
-export function previousOrderedRange(state, articleLength) {
-  const current = storedOrderedRange(state, articleLength);
+export function nextOrderedRange(state, length, articleLength) {
+  if (state?.position == null) return orderedRangeAt(0, length, articleLength);
+  const start = state.position;
+  const current = orderedRangeAt(start, length, articleLength);
   if (!current) return null;
-  if (current.start === 0) return { atBeginning: true };
-  return { start: Math.max(0, current.start - current.length), end: current.start, length: current.length };
+  return orderedRangeAt(current.end, length, articleLength);
 }
 
-export function resolveOrderedRepeat(state, articleLength) {
-  const range = storedOrderedRange(state, articleLength);
-  if (range) return { range, completed: false };
-  return { range: null, completed: state.position >= articleLength };
+export function previousOrderedRange(state, length, articleLength) {
+  const position = state?.position;
+  if (!Number.isSafeInteger(position) || position <= 0) return { atBeginning: true };
+  const start = Math.max(0, position - length);
+  return orderedRangeAt(start, length, articleLength) ? { start, end: position, length } : null;
+}
+
+export function resolveOrderedRepeat(state, length, articleLength) {
+  if (articleLength <= 0) return { range: null, completed: true };
+  if (state?.position == null) return { range: orderedRangeAt(0, length, articleLength), completed: false };
+  if (state.position >= articleLength) return { range: null, completed: true };
+  return { range: orderedRangeAt(state.position, length, articleLength), completed: false };
 }
 
 export function isOrderedSessionCurrent(session, state, articleLength) {
-  const range = storedOrderedRange(state, articleLength);
-  return Boolean(range && session?.mode === 'ordered' && session.startPosition === range.start && session.nextPosition === range.end);
+  return Boolean(session?.mode === 'ordered' && Number.isSafeInteger(state?.position) &&
+    Number.isSafeInteger(session.startPosition) && session.startPosition === state.position &&
+    Number.isSafeInteger(session.nextPosition) && session.nextPosition > session.startPosition &&
+    session.nextPosition <= articleLength);
 }

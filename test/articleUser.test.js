@@ -21,17 +21,18 @@ test('validates persisted last article modes', async () => {
 });
 
 test('reads persisted ordered segment metadata', async () => {
-  const connection = { query(sql, values, callback) { callback(null, [{ position: 250, last_start: 200, last_end: 250, last_length: 100 }]); } };
-  assert.deepEqual(await getProgressState(connection, '1', '文章'), { position: 250, lastStart: 200, lastEnd: 250, lastLength: 100 });
+  const connection = { query(sql, values, callback) { callback(null, [{ position: 200 }]); } };
+  assert.deepEqual(await getProgressState(connection, '1', '文章'), { position: 200 });
 });
 
-test('writes ordered progress atomically and clears its range on manual seek', async () => {
+test('writes the current ordered position and clears it on exhaustion', async () => {
   const calls = [];
   const connection = { query(sql, values, callback) { calls.push({ sql, values }); callback(null, {}); } };
-  assert.deepEqual(await saveOrderedProgress(connection, '1', '文章', 200, 250, 100), { position: 250, lastStart: 200, lastEnd: 250, lastLength: 100 });
-  assert.deepEqual(calls[0].values, ['1', '文章', 250, 200, 250, 100]);
-  assert.match(calls[0].sql, /last_start = values\(last_start\)/);
+  assert.deepEqual(await saveOrderedProgress(connection, '1', '文章', 200), { position: 200 });
+  assert.deepEqual(calls[0].values, ['1', '文章', 200]);
+  assert.match(calls[0].sql, /insert into article_progress \(qqid, title, position\)/);
   await setProgress(connection, '1', '文章', 123);
   assert.deepEqual(calls[1].values, ['1', '文章', 123]);
-  assert.match(calls[1].sql, /last_start = null/);
+  await setProgress(connection, '1', '文章', null);
+  assert.deepEqual(calls[2].values, ['1', '文章', null]);
 });

@@ -2,10 +2,10 @@ import { bot, consql } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { ARTICLE_PREFIX, parseArticleCommand, extractDirectArticleText } from './articleCommands.js';
 import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, getProgressState, setProgress, saveOrderedProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
-import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomLines } from './articleModes.js';
+import { parseSegmentArguments, parseRandomRange, randomParagraph, randomLines } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
-import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
+import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
 import { listArticles, readArticleViews } from './articleStorage.js';
@@ -17,7 +17,7 @@ const userId = e => String(e.sender?.user_id ?? e.user_id);
 const triggerName = e => String(e.sender?.card || e.sender?.nickname || e.sender?.user_id || '未知用户');
 
 async function reportOrderedExhausted(e, title) {
-  await setProgress(consql, userId(e), title, 0);
+  await setProgress(consql, userId(e), title, null);
   closeArticleSession(sessionKey(e));
   return send(e, '文已发空');
 }
@@ -30,7 +30,7 @@ async function deliverOrderedSegment(e, { title, body, bodyIndex, bodyRevision, 
   const number = Number(output.match(/第(\d+)段/u)?.[1]);
   await send(e, output);
   if (persist) {
-    await saveOrderedProgress(consql, userId(e), title, start, end, length);
+    await saveOrderedProgress(consql, userId(e), title, start);
     await setSegmentLength(consql, userId(e), length);
     await saveLastArticleConfig(consql, userId(e), { mode: 'ordered', length, title, condition: conditionText });
   }
@@ -46,9 +46,19 @@ async function sendNextOrderedSegment(e, title, length, conditionText = '') {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
     const view = await readArticleViews(title), body = view.compactText, articleLength = view.compactIndex.length;
     const state = await getProgressState(consql, userId(e), title);
-    if (state.position >= articleLength) return reportOrderedExhausted(e, title);
-    const segment = orderedSegment(body, state.position, length, view.compactIndex);
-    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, start: state.position, end: segment.nextPosition, length, conditionText });
+    const repeat = resolveOrderedRepeat(state, length, articleLength);
+    if (repeat.completed) return reportOrderedExhausted(e, title);
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...repeat.range, conditionText });
+  });
+}
+
+async function sendFollowingOrderedSegment(e, title, length, conditionText = '') {
+  return withOrderedLock(orderedLockKey(userId(e), title), async () => {
+    const view = await readArticleViews(title), body = view.compactText, articleLength = view.compactIndex.length;
+    const state = await getProgressState(consql, userId(e), title);
+    const range = nextOrderedRange(state, length, articleLength);
+    if (!range) return reportOrderedExhausted(e, title);
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...range, conditionText });
   });
 }
 
@@ -68,7 +78,7 @@ async function progress(e, args) {
   const settings = await getArticleSettings(consql, userId(e));
   if (!settings.current_title) return send(e, '尚未选择文章，请先发送“-选 <标题>”。');
   const title = settings.current_title, length = (await readArticleViews(title)).compactIndex.length;
-  const oldPosition = await getProgress(consql, userId(e), title);
+  const oldPosition = (await getProgress(consql, userId(e), title)) ?? 0;
   const expression = args.join(' ').trim();
   let position = oldPosition;
   if (expression) {
@@ -167,20 +177,18 @@ async function repeatOrdered(e, title, length, conditionText = '', session = nul
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
     const view = await readArticleViews(title), body = view.compactText, articleLength = view.compactIndex.length;
     const state = await getProgressState(consql, userId(e), title);
-    const repeat = resolveOrderedRepeat(state, articleLength);
+    const repeat = resolveOrderedRepeat(state, length, articleLength);
     if (session?.lastMessage && session.articleRevision === view.compactRevision && isOrderedSessionCurrent(session, state, articleLength)) {
       touchArticleSession(session);
       return send(e, session.lastMessage);
     }
     if (session) closeArticleSession(sessionKey(e));
-    if (repeat.range) return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...repeat.range, conditionText, persist: false });
     if (repeat.completed) return reportOrderedExhausted(e, title);
-    const segment = orderedSegment(body, state.position, length, view.compactIndex);
-    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, start: state.position, end: segment.nextPosition, length, conditionText });
+    return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...repeat.range, conditionText });
   });
 }
 
-async function resumeLastConfig(e, repeatOrderedSegment = false) {
+async function resumeLastConfig(e, repeatOrderedSegment = false, advanceOrdered = false) {
   const settings = await getArticleSettings(consql, userId(e));
   let mode = settings.last_mode, title = settings.last_title || settings.current_title;
   if (!mode && title) mode = 'ordered';
@@ -189,6 +197,7 @@ async function resumeLastConfig(e, repeatOrderedSegment = false) {
   if (mode === 'difficulty') return difficultyMode(e, settings.last_difficulty, [length], settings.last_condition || '');
   if (!title) throw new Error('上一次发文没有可用的文章标题。');
   if (mode === 'ordered' && repeatOrderedSegment) return repeatOrdered(e, title, Number(length), settings.last_condition || '');
+  if (mode === 'ordered' && advanceOrdered) return sendFollowingOrderedSegment(e, title, Number(length), settings.last_condition || '');
   const args = [length, title];
   if (mode === 'characters' && settings.last_range_start != null && settings.last_range_end != null) args.push(`${settings.last_range_start}-${settings.last_range_end}`);
   if (settings.last_condition) args.push('|', settings.last_condition);
@@ -241,6 +250,7 @@ async function modeStatus(e) {
 async function continueSession(e, session) {
   touchArticleSession(session);
   if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)], session.conditionText);
+  if (session.mode === 'ordered') return sendFollowingOrderedSegment(e, session.title, session.length, session.conditionText);
   const args = [String(session.length), session.title];
   if (session.mode === 'characters' && session.rangeStart != null && session.rangeEnd != null) args.push(`${session.rangeStart}-${session.rangeEnd}`);
   if (session.conditionText) args.push('|', session.conditionText);
@@ -257,9 +267,9 @@ async function sendPreviousOrderedSegment(e, session) {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
     const view = await readArticleViews(title), body = view.compactText, articleLength = view.compactIndex.length;
     const state = await getProgressState(consql, userId(e), title);
-    const range = previousOrderedRange(state, articleLength);
-    if (!range) throw new Error('没有可靠的上一段记录，请先发送一次“-顺”或“-下”。');
-    if (range.atBeginning) throw new Error('已经是第一段，无法上一段。');
+    const length = Number(session?.length || settings.segment_length || 100);
+    const range = previousOrderedRange(state, length, articleLength);
+    if (!range || range.atBeginning) throw new Error('已经是第一段，无法上一段。');
     return deliverOrderedSegment(e, { title, body, bodyIndex: view.compactIndex, bodyRevision: view.compactRevision, articleLength, ...range, conditionText });
   });
 }
@@ -275,7 +285,7 @@ async function handleSessionCommand(e, command) {
     return send(e, conditionText ? `自动续段条件已设置：${conditionText}` : '已恢复无条件自动续段。');
   }
   if (command.action === '下' || command.action === '下一段') {
-    if (!session) return resumeLastConfig(e, false);
+    if (!session) return resumeLastConfig(e, false, true);
     return continueSession(e, session);
   }
   if (command.action === '上' || command.action === '上一段') {
