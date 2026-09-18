@@ -5,7 +5,6 @@ import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagrap
 import { formatArticleMessage } from '../dist/articleMessage.js';
 import { chooseDifficultySegment } from '../dist/articleDifficulty.js';
 import { get_rank } from '../dist/rank.js';
-import { startDifficultyMapTask, getDifficultyMapTaskStatus } from '../dist/articleMapManager.js';
 
 export function parseCliLine(line) {
   const text = String(line || '').trim();
@@ -24,8 +23,6 @@ function printHelp() {
   乱 [字数] [起止]        随机不重复下标发文，如：乱 20 1-100
   难 <难度> [字数]        难度发文
   搜 <关键词>             搜索当前文章
-  索                      同步难度地图
-  状                      查看地图任务状态
   帮助 / 退出`);
 }
 
@@ -85,8 +82,6 @@ export async function runCli({ input = process.stdin, output = process.stdout } 
         const result = searchArticle(await readArticle(getSelected()), args.join(' '));
         write(result.items.length ? result.items.map(item => `第 ${item.position} 字：${item.context}`).join('\n') : '没有找到。'); continue;
       }
-      if (command === '索' || command === 'map') { write('难度地图同步中，请稍候...'); const result = await startDifficultyMapTask(); write(result.cancelled ? '同步已取消。' : `同步完成：${result.records.length} 条记录。`); continue; }
-      if (command === '状' || command === 'status') { write(JSON.stringify(getDifficultyMapTaskStatus())); continue; }
       throw new Error(`未知命令“${command}”，输入“帮助”查看用法。`);
     } catch (error) { write(`错误：${error.message}`); }
   }

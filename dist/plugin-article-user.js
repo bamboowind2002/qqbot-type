@@ -6,11 +6,8 @@ import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagrap
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { isOrderedSessionCurrent, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
-import { DIFFICULTY_RANGES, isDifficultyMatch, isValidDifficultyResult, normalizeDifficulty } from './articleDifficulty.js';
+import { chooseDifficultySegment, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
-import { readDifficultyMap } from './articleMap.js';
-import { sampleDifficultySegments } from './articleDifficultyStore.js';
-import { candidateCacheGet, candidateCachePut } from './articleCandidateCache.js';
 import { listArticles, readArticleViews } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 import { sliceCodePoints } from './unicodeText.js';
@@ -132,89 +129,30 @@ async function articleMode(e, mode, args) {
   return send(e, output);
 }
 
-async function findDifficultySegment(length, difficulty, mapRecords, excluded, deadline = Date.now() + 5000) {
-  const range = DIFFICULTY_RANGES[normalizeDifficulty(difficulty)];
-  const viewCache = new Map();
-  const getView = async title => {
-    if (viewCache.has(title)) {
-      const view = viewCache.get(title);
-      viewCache.delete(title); viewCache.set(title, view);
-      return view;
-    }
-    let view;
-    try { view = await readArticleViews(title); }
-    catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
-    viewCache.set(title, view);
-    if (viewCache.size > 16) viewCache.delete(viewCache.keys().next().value);
-    return view;
-  };
-  const distance = score => score >= range[0] && score < range[1] ? 0 : score < range[0] ? range[0] - score : score - range[1];
-  const evaluate = async (title, start, source = null) => {
-    if (excluded.has(`${title}:${start}`)) return null;
-    const view = await getView(title);
-    if (!view) return null;
-    if (source?.revision && source.revision !== view.compactRevision) return null;
-    const body = view.compactText, articleLength = view.compactIndex.length;
-    const actualStart = Math.max(0, Math.min(articleLength - length, start));
-    if (actualStart < 0 || actualStart + length > articleLength || excluded.has(`${title}:${actualStart}`)) return null;
-    const text = sliceCodePoints(body, actualStart, length, view.compactIndex), [score, , rank, error] = get_rank(text);
-    return isValidDifficultyResult(score, rank, error) ? { title, text, body, revision: view.compactRevision, start: actualStart, score, rank } : null;
-  };
-  const seen = new Set();
-  const sources = [
-    ...candidateCacheGet(length, difficulty),
-    ...mapRecords.filter(record => Number.isInteger(record.start)).sort((a, b) => distance(a.score) - distance(b.score)).slice(0, 1000)
-  ].filter(source => {
-    const key = `${source.title}:${source.start}`;
-    if (seen.has(key)) return false;
-    seen.add(key); return true;
-  });
-  let best = null;
-  for (const source of sources) {
-    if (Date.now() > deadline) break;
-    const candidate = await evaluate(source.title, source.start, source);
-    if (!candidate) continue;
-    if (!best || distance(candidate.score) < distance(best.score)) best = candidate;
-    if (isDifficultyMatch(candidate.score, difficulty)) return candidate;
-  }
-  // The database normally supplies a valid candidate. Only enumerate the
-  // article directory when stale records force the random-search fallback.
-  const titles = listArticles({ sort: false });
-  if (!titles.length) return best;
-  for (let attempt = 0; attempt < 300 && Date.now() <= deadline; attempt++) {
-    const title = titles[Math.floor(Math.random() * titles.length)];
-    const view = await getView(title);
-    if (!view) continue;
-    if (view.compactIndex.length < length) continue;
-    const start = Math.floor(Math.random() * (view.compactIndex.length - length + 1));
-    const candidate = await evaluate(title, start);
-    if (!candidate) continue;
-    if (!best || distance(candidate.score) < distance(best.score)) best = candidate;
-    if (isDifficultyMatch(candidate.score, difficulty)) return candidate;
-  }
-  return best;
-}
-
 async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const settings = await getArticleSettings(consql, userId(e));
   const parsed = parseSegmentArguments(args, Number(settings.segment_length) || 100);
   const previous = getArticleSession(sessionKey(e));
   const normalized = normalizeDifficulty(difficulty);
-  const databaseCandidates = await sampleDifficultySegments(consql, normalized === '爆' ? '爆表' : normalized, parsed.length);
-  const mapRecords = databaseCandidates ? databaseCandidates.records : (await readDifficultyMap()).records || [];
   const sameMode = previous?.mode === 'difficulty' && previous.length === parsed.length && previous.difficulty === normalized;
   const recent = sameMode ? (previous.recentSegments || []) : [];
   let excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
-  const deadline = Date.now() + 5000;
-  let result = await findDifficultySegment(parsed.length, normalized, mapRecords, excluded, deadline);
-  if (!result && excluded.size && Date.now() <= deadline) {
-    excluded = new Set(); result = await findDifficultySegment(parsed.length, normalized, mapRecords, excluded, deadline);
+  const articles = await Promise.all(listArticles({ sort: false }).map(async title => {
+    try {
+      const view = await readArticleViews(title);
+      return { title, text: view.compactText, textIndex: view.compactIndex, revision: view.compactRevision };
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+  }));
+  const eligibleArticles = articles.filter(Boolean);
+  let result = chooseDifficultySegment(eligibleArticles, parsed.length, normalized, get_rank, Math.random, () => Date.now(), excluded);
+  if (!result && excluded.size) {
+    result = chooseDifficultySegment(eligibleArticles, parsed.length, normalized, get_rank, Math.random, () => Date.now(), new Set());
   }
   if (!result) throw new Error('没有找到可用段落。');
-  const revision = result.revision;
-  if (isDifficultyMatch(result.score, normalized)) {
-    candidateCachePut({ length: parsed.length, difficulty: normalized, title: result.title, revision, start: result.start, score: result.score });
-  }
+  const revision = eligibleArticles.find(article => article.title === result.title)?.revision || null;
   await setSegmentLength(consql, userId(e), parsed.length);
   const output = formatArticleMessage(result.text, { title: result.title, trigger: triggerName(e) });
   const number = Number(output.match(/第(\d+)段/u)?.[1]);

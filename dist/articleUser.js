@@ -71,7 +71,7 @@ export async function saveOrderedProgress(connection, qqid, title, start, end, l
 }
 
 // Character-indexed features use the compact view so line-break edits never
-// shift progress, search positions, or difficulty-map starts.
+// shift progress or search positions.
 export async function readArticle(title) { return (await readArticleViews(title)).compactText; }
 
 export function clampProgress(position, length) {

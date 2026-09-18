@@ -10,9 +10,6 @@ import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
 import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
-import { startDifficultyMapTask, getDifficultyMapTaskStatus, cancelDifficultyMapTask } from './articleMapManager.js';
-import { readDifficultyMap, renameDifficultyMapTitle } from './articleMap.js';
-import { getActiveDifficultyGeneration, renameDifficultyRecords } from './articleDifficultyStore.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
 
 const deleteTokens = new Map();
@@ -194,19 +191,12 @@ async function handleAdmin(e, command) {
   if (command.action === 'article-rename') {
     if (args.length !== 2) throw new Error('格式：-管 重命名 <旧标题> <新标题>');
     const oldTitle = validateArticleTitle(args[0]), newTitle = validateArticleTitle(args[1]);
-    if (getDifficultyMapTaskStatus().running) throw new Error('难度地图正在同步，请稍后再重命名文章。');
     const filesystemRename = await renameArticle(oldTitle, newTitle);
     let databaseRenamed = false;
-    let difficultyRenamed = false;
     try {
       await renameArticleReferences(oldTitle, newTitle);
       databaseRenamed = true;
-      difficultyRenamed = await renameDifficultyRecords(consql, oldTitle, newTitle);
-      await renameDifficultyMapTitle(oldTitle, newTitle);
     } catch (err) {
-      if (difficultyRenamed) {
-        try { await renameDifficultyRecords(consql, newTitle, oldTitle); } catch (rollbackError) { console.warn('文章难度记录回滚失败:', rollbackError.message || rollbackError); }
-      }
       if (databaseRenamed) {
         try { await renameArticleReferences(newTitle, oldTitle); } catch (rollbackError) { console.warn('文章重命名数据库回滚失败:', rollbackError.message || rollbackError); }
       }
@@ -214,28 +204,6 @@ async function handleAdmin(e, command) {
       throw err;
     }
     return send(e, `文章“${filesystemRename.oldTitle}”已重命名为“${filesystemRename.newTitle}”。`);
-  }
-  if (command.action === 'map-status') {
-    const status = getDifficultyMapTaskStatus();
-    if (status.running) return send(e, `难度地图后端：MySQL；generation ${status.generationId || '待创建'} 同步中：${status.processed}/${status.total} 篇，` +
-      `总块 ${status.totalBlocks || 0}，有效 ${status.records || 0}，无效 ${status.invalid || 0}${status.cancelRequested ? '，等待取消' : ''}。`);
-    const active = await getActiveDifficultyGeneration(consql);
-    if (!active) {
-      const legacy = await readDifficultyMap();
-      const records = legacy.records || [];
-      return send(e, `难度地图后端：JSON 回退；generation 无，文章 ${new Set(records.map(row => row.title)).size} 篇，` +
-        `总块 ${records.length}，有效 ${records.length}，无效未记录；当前没有同步任务。`);
-    }
-    return send(e, `难度地图后端：MySQL；generation ${active.id}，文章 ${active.article_count} 篇，` +
-      `总块 ${active.total_block_count}，有效 ${active.valid_record_count}，无效 ${active.invalid_record_count}；当前没有同步任务。`);
-  }
-  if (command.action === 'map-cancel') return send(e, cancelDifficultyMapTask() ? '已请求取消难度地图同步。' : '当前没有正在运行的难度地图任务。');
-  if (command.action === 'map-sync') {
-    if (command.args?.length) throw new Error('格式：-管 索');
-    send(e, '难度地图同步已开始。');
-    const result = await startDifficultyMapTask();
-    return send(e, result.cancelled ? '难度地图同步已取消，已提交的旧 generation 保持不变。' :
-      `难度地图同步完成：generation ${result.generationId}，文章 ${result.articleCount} 篇，总块 ${result.totalBlocks}，有效 ${result.records}，无效 ${result.invalid}，重算 ${result.changed} 篇。`);
   }
   if (command.action === 'upload') {
     if (args.length < 2) throw new Error('格式：-管 传 <分类> <文章标题>');
@@ -285,7 +253,7 @@ bot.on('message', async e => {
     if (command.action === 'help') return await send(e, ARTICLE_HELP);
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
-    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'map-sync', 'map-status', 'map-cancel', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return await handleAdmin(e, command);
+    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return await handleAdmin(e, command);
   } catch (err) {
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.error('[plugin-article] command failed', { ...articleEventContext(e), isAdmin, error: err?.message || String(err), stack: err?.stack });

@@ -49,4 +49,4 @@ node article_import/batch-importer.js --max-pages=1
 node article_import/batch-importer.js --state=/tmp/article-import-state.json
 ```
 
-脚本只写文章文件，不连接 NapCat，也不修改数据库；文章进度和用户设置不受影响。全部导入后，如需使用难度发文，使用机器人管理员命令 `-管 索` 同步难度地图。
+脚本只写文章文件，不连接 NapCat，也不修改数据库；文章进度和用户设置不受影响。导入完成后，难度发文会直接从文章中随机拒绝采样，无需额外生成索引。

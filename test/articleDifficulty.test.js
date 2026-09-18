@@ -1,48 +1,93 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseDifficultySegment, isValidDifficultyResult, normalizeDifficulty } from '../dist/articleDifficulty.js';
+import {
+  chooseDifficultySegment,
+  isDifficultyMatch,
+  isValidDifficultyResult,
+  normalizeDifficulty
+} from '../dist/articleDifficulty.js';
 import { analyze_rank, get_rank } from '../dist/rank.js';
 
-test('selects an exact difficulty candidate before falling back to nearest', () => {
-  const articles = [{ title: '甲', text: 'abcdefghij' }, { title: '乙', text: 'klmnopqrst' }];
-  const ranks = text => text === 'abcdefghij' ? [0.2, 'shui', '水', false] : [20, 'nue', '虐', false];
-  const exact = chooseDifficultySegment(articles, 10, '水', ranks, () => 0);
-  assert.equal(exact.rank, '水');
-  const fallback = chooseDifficultySegment(articles, 10, '普', ranks, () => 0);
-  assert.equal(fallback.rank, '水');
+test('difficulty boundaries exclude negative scores from 淼', () => {
+  assert.equal(isDifficultyMatch(-1, '淼'), false);
+  assert.equal(isDifficultyMatch(0, '淼'), true);
+  assert.equal(isDifficultyMatch(0.0999, '淼'), true);
+  assert.equal(isDifficultyMatch(0.1, '淼'), false);
+  assert.equal(isValidDifficultyResult(-1, '淼', false), false);
+  assert.equal(isValidDifficultyResult(0, '淼', false), true);
 });
 
-test('validates the seven supported difficulty names', () => {
+test('validates the supported difficulty names and aliases', () => {
   assert.equal(normalizeDifficulty('爆'), '爆');
   assert.equal(normalizeDifficulty('爆表'), '爆表');
   assert.throws(() => normalizeDifficulty('未知'), /难度只能/);
 });
 
-test('prefers nearby map records before random fallback', () => {
-  const articles = [{ title: '甲', text: 'abcdefghij' }, { title: '乙', text: 'klmnopqrst' }];
-  const hints = [{ title: '乙', start: 0, length: 100, score: 0.2 }, { title: '甲', start: 0, length: 100, score: 20 }];
-  const result = chooseDifficultySegment(articles, 10, '水', () => [0.2, 'shui', '水', false], () => 0, () => Date.now(), hints);
+test('reject-samples until it finds an exact target difficulty', () => {
+  const articles = [{ title: '甲', text: 'a'.repeat(20) }, { title: '乙', text: 'b'.repeat(20) }];
+  const ranks = text => text[0] === 'a'
+    ? [20, 'nue', '虐', false]
+    : [0.2, 'shui', '水', false];
+  let randomCalls = 0;
+  const result = chooseDifficultySegment(articles, 10, '水', ranks, () => {
+    randomCalls++;
+    return randomCalls === 3 ? 0.99 : 0;
+  }, () => 0);
   assert.equal(result.title, '乙');
+  assert.equal(result.score, 0.2);
+  assert.equal(result.attempts, 2);
 });
 
-test('can exclude recently used difficulty segments', () => {
-  const result = chooseDifficultySegment([{ title: '甲', text: '甲'.repeat(300) }], 100, '水', () => [0.2, 0, '水', null], () => 0.5, () => 0, [], new Set(['甲:0']));
-  assert.notEqual(result.start, 0);
-});
-
-test('rejects difficulty results without a valid rank', () => {
-  assert.equal(isValidDifficultyResult(-1, null, null), false);
-  assert.equal(isValidDifficultyResult(0.2, '水', null), true);
-  const result = chooseDifficultySegment([{ title: '无效', text: 'x'.repeat(10) }], 10, '淼', () => [-1, null, null, null], () => 0, () => 0);
+test('does not return the nearest difficulty when sampling fails', () => {
+  const result = chooseDifficultySegment(
+    [{ title: '甲', text: 'a'.repeat(20) }],
+    10,
+    '水',
+    () => [20, 'nue', '虐', false],
+    () => 0,
+    () => 0
+  );
   assert.equal(result, null);
 });
 
-test('rank analysis preserves the public result and exposes composable contributions', () => {
-  for (const text of ['满面泪流', '一个用于验证难度摘要的普通句子', 'ABC 123']) {
-    const result = analyze_rank(text);
-    assert.deepEqual(get_rank(text), [result.score, result.rankEn, result.rank, result.error]);
-    assert.equal(result.score, Math.round((result.hard / result.water) * 100) / 100);
-    assert.equal(result.waterDelta, result.water - 1);
-  }
-  assert.deepEqual(get_rank('   '), [-1, null, null, null]);
+test('stops after the rejection sampling attempt budget', () => {
+  let evaluations = 0;
+  const result = chooseDifficultySegment(
+    [{ title: '甲', text: 'a'.repeat(10) }],
+    10,
+    '水',
+    () => { evaluations++; return [20, 'nue', '虐', false]; },
+    () => 0,
+    () => 0
+  );
+  assert.equal(result, null);
+  assert.equal(evaluations, 300);
+});
+
+test('excludes recently used segments', () => {
+  const result = chooseDifficultySegment(
+    [{ title: '甲', text: 'a'.repeat(30) }],
+    10,
+    '水',
+    () => [0.2, 'shui', '水', false],
+    (() => {
+      let calls = 0;
+      return () => ++calls === 4 ? 0.1 : 0;
+    })(),
+    () => 0,
+    new Set(['甲:0'])
+  );
+  assert.notEqual(result.start, 0);
+});
+
+test('rejects invalid rank results and insufficient articles', () => {
+  assert.equal(chooseDifficultySegment([{ title: '无效', text: 'x'.repeat(10) }], 10, '淼', () => [-1, null, null, null], () => 0, () => 0), null);
+  assert.throws(() => chooseDifficultySegment([{ title: '短', text: 'x'.repeat(9) }], 10, '淼', get_rank), /没有长度达到/);
+});
+
+test('rank analysis keeps negative empty input outside all difficulty ranks', () => {
+  const result = analyze_rank('   ');
+  assert.deepEqual(get_rank('   '), [result.score, result.rankEn, result.rank, result.error]);
+  assert.equal(result.score, -1);
+  assert.equal(isDifficultyMatch(result.score, '淼'), false);
 });
