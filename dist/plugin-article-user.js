@@ -8,7 +8,7 @@ import { compileScoreCondition, getArticleSession, openArticleSession, closeArti
 import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { chooseDifficultySegmentStreaming, normalizeDifficulty } from './articleDifficulty.js';
 import { get_rank } from './rank.js';
-import { listArticles, readArticleViews, scanArticleMetadata, readArticleSelection } from './articleStorage.js';
+import { listArticles, scanArticleMetadata, readArticleSelection } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 import { toArticleUserMessage } from './articleErrors.js';
 
@@ -85,7 +85,7 @@ async function list(e, command) {
   const page = Math.max(1, command.page || 1), size = 50;
   const pageNames = names.slice((page - 1) * size, page * size);
   const display = command.showLength
-    ? await Promise.all(pageNames.map(async title => `${title}（${(await readArticleViews(title)).compactIndex.length}字）`))
+    ? await Promise.all(pageNames.map(async title => `${title}（${(await scanArticleMetadata(title)).compactLength}字）`))
     : pageNames;
   return send(e, `文章列表（${page}/${Math.max(1, Math.ceil(names.length / size))}，共 ${names.length} 篇）\n${display.join('\n')}`);
 }
@@ -93,7 +93,7 @@ async function list(e, command) {
 async function progress(e, args) {
   const settings = await getArticleSettings(consql, userId(e));
   if (!settings.current_title) return send(e, '尚未选择文章，请先发送“-选 <标题>”。');
-  const title = settings.current_title, length = (await readArticleViews(title)).compactIndex.length;
+  const title = settings.current_title, length = (await scanArticleMetadata(title)).compactLength;
   const oldPosition = (await getProgress(consql, userId(e), title)) ?? 0;
   const expression = args.join(' ').trim();
   let position = oldPosition;
