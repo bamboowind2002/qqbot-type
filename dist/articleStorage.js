@@ -14,6 +14,9 @@ export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
 const articleViewCache = new Map();
 const ARTICLE_VIEW_CACHE_MAX_BYTES = 64 * 1024 ** 2;
 let articleViewCacheBytes = 0;
+const articleMetadataCache = new Map();
+const ARTICLE_METADATA_CACHE_MAX_BYTES = 16 * 1024 ** 2;
+let articleMetadataCacheBytes = 0;
 
 const ENCODINGS = new Map([
   ['utf8', 'utf-8'], ['utf-8', 'utf-8'], ['utf16le', 'utf-16le'],
@@ -157,6 +160,29 @@ function articleChangedError(title) {
   return error;
 }
 
+function estimateArticleMetadataBytes(metadata) {
+  return 256 + metadata.lineLengths.length * 8;
+}
+
+function cloneArticleMetadata(metadata) {
+  return { ...metadata, lineLengths: [...metadata.lineLengths] };
+}
+
+function cacheArticleMetadata(title, metadata) {
+  const previous = articleMetadataCache.get(title);
+  if (previous) articleMetadataCacheBytes -= previous.bytes;
+  const entry = { metadata, bytes: estimateArticleMetadataBytes(metadata) };
+  articleMetadataCache.delete(title);
+  articleMetadataCache.set(title, entry);
+  articleMetadataCacheBytes += entry.bytes;
+  while (articleMetadataCacheBytes > ARTICLE_METADATA_CACHE_MAX_BYTES && articleMetadataCache.size > 1) {
+    const oldestTitle = articleMetadataCache.keys().next().value;
+    const oldest = articleMetadataCache.get(oldestTitle);
+    articleMetadataCache.delete(oldestTitle);
+    articleMetadataCacheBytes -= oldest.bytes;
+  }
+}
+
 async function articleStat(title) {
   try {
     return await fsp.stat(articlePath(title));
@@ -171,6 +197,12 @@ async function articleStat(title) {
 export async function scanArticleMetadata(title) {
   const file = articlePath(title);
   const before = await articleStat(title);
+  const cached = articleMetadataCache.get(title);
+  if (cached && cached.metadata.mtimeMs === before.mtimeMs && cached.metadata.size === before.size) {
+    articleMetadataCache.delete(title);
+    articleMetadataCache.set(title, cached);
+    return cloneArticleMetadata(cached.metadata);
+  }
   const textHash = crypto.createHash('sha256');
   const compactHash = crypto.createHash('sha256');
   const decoder = new StringDecoder('utf8');
@@ -201,7 +233,7 @@ export async function scanArticleMetadata(title) {
   } finally { stream.destroy(); }
   const after = await articleStat(title);
   if (before.mtimeMs !== after.mtimeMs || before.size !== after.size) throw articleChangedError(title);
-  return {
+  const metadata = {
     compactLength,
     lineLengths,
     lineCount: lineLengths.length,
@@ -210,6 +242,8 @@ export async function scanArticleMetadata(title) {
     mtimeMs: after.mtimeMs,
     size: after.size
   };
+  cacheArticleMetadata(title, metadata);
+  return cloneArticleMetadata(metadata);
 }
 
 function validateSelection(selection, metadata) {
@@ -282,6 +316,9 @@ export function invalidateArticleView(title) {
   const key = String(title), cached = articleViewCache.get(key);
   if (cached) articleViewCacheBytes -= cached.bytes;
   articleViewCache.delete(key);
+  const metadata = articleMetadataCache.get(key);
+  if (metadata) articleMetadataCacheBytes -= metadata.bytes;
+  articleMetadataCache.delete(key);
 }
 
 function diskFreeBytes(directory) {

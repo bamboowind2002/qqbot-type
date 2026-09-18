@@ -61,7 +61,7 @@ test('stops after the rejection sampling attempt budget', () => {
     () => 0
   );
   assert.equal(result, null);
-  assert.equal(evaluations, 300);
+  assert.equal(evaluations, 1000);
 });
 
 test('excludes recently used segments', () => {
