@@ -11,6 +11,7 @@ import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
 import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
+import { articleBatchErrorMessage, toArticleUserMessage } from './articleErrors.js';
 
 const deleteTokens = new Map();
 function articleEventContext(e) {
@@ -147,7 +148,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
         titles.add(title);
         entries.push({ title, text });
       } catch (err) {
-        skipped.push({ file: relative, reason: err.message });
+        skipped.push({ file: relative, reason: articleBatchErrorMessage(err) });
       }
       await onProgress({ phase: '校验', processed: index + 1, total: files.length, success: entries.length, skipped: skipped.length });
     }
@@ -161,7 +162,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
         const result = await saveBatchArticle(entry.title, entry.text);
         await addArticleCategory(category, entry.title);
         results.push(result);
-      } catch (err) { skipped.push({ file: `${entry.title}.txt`, reason: err.message }); }
+      } catch (err) { skipped.push({ file: `${entry.title}.txt`, reason: articleBatchErrorMessage(err) }); }
       await onProgress({ phase: '上传', processed: validationSkipped + index + 1, total: files.length, success: results.length, skipped: skipped.length });
     }
     return { results, skipped };
@@ -258,7 +259,7 @@ bot.on('message', async e => {
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.error('[plugin-article] command failed', { ...articleEventContext(e), isAdmin, error: err?.message || String(err), stack: err?.stack });
     if (isAdmin) {
-      try { await send(e, `发文管理失败：${err.message}`); }
+      try { await send(e, `发文管理失败：${toArticleUserMessage(err, '发文管理失败，请稍后重试。')}`); }
       catch (replyError) { console.error('[plugin-article] error reply failed', { ...articleEventContext(e), error: replyError?.message || String(replyError) }); }
     }
   }

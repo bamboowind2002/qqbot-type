@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { ARTICLE_CATEGORY_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 import { validateArticleTitle } from './articleStorage.js';
+import { articleUserError } from './articleErrors.js';
 
 export function validateCategoryName(name) {
   name = String(name ?? '').trim();
@@ -28,7 +29,7 @@ export async function renameArticleCategory(oldCategory, newCategory) {
   if (oldCategory === newCategory) throw new Error('新旧分类名相同，无需重命名。');
   const source = categoryPath(oldCategory), target = categoryPath(newCategory);
   const sourceStat = await fsp.lstat(source).catch(err => {
-    if (err.code === 'ENOENT') throw new Error(`分类“${oldCategory}”不存在。`);
+    if (err.code === 'ENOENT') throw articleUserError(`分类“${oldCategory}”不存在。`, { cause: err });
     throw err;
   });
   if (!sourceStat.isDirectory()) throw new Error(`分类“${oldCategory}”不是目录。`);
@@ -95,7 +96,12 @@ export async function addArticleCategory(category, title) {
 export async function removeArticleCategory(category, title) {
   category = validateCategoryName(category); title = validateArticleTitle(title);
   const link = linkPath(category, title);
-  await fsp.unlink(link);
+  try {
+    await fsp.unlink(link);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`分类“${category}”中不存在文章“${title}”。`, { cause: err });
+    throw err;
+  }
   try { if (!(await fsp.readdir(categoryPath(category))).length) await fsp.rmdir(categoryPath(category)); } catch (_) {}
   return { category, title };
 }

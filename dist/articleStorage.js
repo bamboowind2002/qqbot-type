@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 import { countCodePoints, createCodePointIndex } from './unicodeText.js';
+import { articleUserError } from './articleErrors.js';
 
 export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 
@@ -37,7 +38,7 @@ export async function renameArticle(oldTitle, newTitle) {
   if (oldTitle === newTitle) throw new Error('新旧文章标题相同，无需重命名。');
   const source = articlePath(oldTitle), target = articlePath(newTitle);
   const sourceStat = await fsp.stat(source).catch(err => {
-    if (err.code === 'ENOENT') throw new Error(`文章“${oldTitle}”不存在。`);
+    if (err.code === 'ENOENT') throw articleUserError(`文章“${oldTitle}”不存在。`, { cause: err });
     throw err;
   });
   if (!sourceStat.isFile()) throw new Error(`文章“${oldTitle}”不是普通文件。`);
@@ -124,14 +125,27 @@ function cacheArticleView(title, value) {
 
 export async function readArticleViews(title) {
   const file = articlePath(title);
-  const stat = await fsp.stat(file);
+  let stat;
+  try {
+    stat = await fsp.stat(file);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`文章“${title}”不存在。`, { cause: err });
+    throw err;
+  }
   const cached = articleViewCache.get(title);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     articleViewCache.delete(title);
     articleViewCache.set(title, cached);
     return cached.view;
   }
-  const view = articleView(await fsp.readFile(file, 'utf8').then(buffer => normalizeArticleText(Buffer.from(buffer), 'utf-8')));
+  let source;
+  try {
+    source = await fsp.readFile(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`文章“${title}”不存在。`, { cause: err });
+    throw err;
+  }
+  const view = articleView(normalizeArticleText(Buffer.from(source), 'utf-8'));
   cacheArticleView(title, { mtimeMs: stat.mtimeMs, size: stat.size, view, bytes: estimateArticleViewBytes(view) });
   return view;
 }
@@ -204,7 +218,13 @@ export async function createArticleBatchWriter() {
 export async function replaceArticleRange(title, start, end, pattern, replacement) {
   title = validateArticleTitle(title);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start + 1 > 10_000_000) throw new Error('替换区间必须是 1 至 10000000 个字符。');
-  const old = await fsp.readFile(articlePath(title));
+  let old;
+  try {
+    old = await fsp.readFile(articlePath(title));
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`文章“${title}”不存在。`, { cause: err });
+    throw err;
+  }
   const text = normalizeArticleText(old, 'utf-8');
   const chars = [...compactArticleText(text)];
   if (end > chars.length) throw new Error(`文章只有 ${chars.length} 个字符，区间超出范围。`);
@@ -223,7 +243,12 @@ export async function replaceArticleRange(title, start, end, pattern, replacemen
 }
 
 export async function deleteArticle(title) {
-  await fsp.rm(articlePath(title));
+  try {
+    await fsp.rm(articlePath(title));
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`文章“${title}”不存在。`, { cause: err });
+    throw err;
+  }
   invalidateArticleView(title);
   const { removeArticleFromAllCategories } = await import('./articleCategories.js');
   await removeArticleFromAllCategories(title);

@@ -11,6 +11,7 @@ import { get_rank } from './rank.js';
 import { listArticles, readArticleViews } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 import { sliceCodePoints } from './unicodeText.js';
+import { toArticleUserMessage } from './articleErrors.js';
 
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
 const userId = e => String(e.sender?.user_id ?? e.user_id);
@@ -356,7 +357,7 @@ bot.on('message', async e => {
     if (['上', '上一段', '下', '下一段', '停', '结束发文', '自', '设置自动续段'].includes(command.action)) return await handleSessionCommand(e, command);
     return;
   } catch (err) {
-    try { await send(e, `发文操作失败：${err.message}`); }
+    try { await send(e, `发文操作失败：${toArticleUserMessage(err)}`); }
     catch (replyError) { console.error('发送发文错误回复失败：', replyError?.message || replyError); }
   }
 });
