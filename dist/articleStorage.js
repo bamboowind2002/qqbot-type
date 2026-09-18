@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 import { countCodePoints, createCodePointIndex } from './unicodeText.js';
 import { articleUserError } from './articleErrors.js';
@@ -148,6 +149,133 @@ export async function readArticleViews(title) {
   const view = articleView(normalizeArticleText(Buffer.from(source), 'utf-8'));
   cacheArticleView(title, { mtimeMs: stat.mtimeMs, size: stat.size, view, bytes: estimateArticleViewBytes(view) });
   return view;
+}
+
+function articleChangedError(title) {
+  const error = new Error(`文章“${title}”在读取期间发生变化，请重试。`);
+  error.code = 'ARTICLE_CHANGED';
+  return error;
+}
+
+async function articleStat(title) {
+  try {
+    return await fsp.stat(articlePath(title));
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw articleUserError(`文章“${title}”不存在。`, { cause: err });
+    throw err;
+  }
+}
+
+// Scan only the small amount of information needed by the posting modes. The
+// StringDecoder keeps a UTF-8 code point intact when it crosses a stream chunk.
+export async function scanArticleMetadata(title) {
+  const file = articlePath(title);
+  const before = await articleStat(title);
+  const textHash = crypto.createHash('sha256');
+  const compactHash = crypto.createHash('sha256');
+  const decoder = new StringDecoder('utf8');
+  const lineLengths = [];
+  let lineLength = 0, compactLength = 0;
+  const stream = fs.createReadStream(file);
+  try {
+    for await (const chunk of stream) {
+      const text = decoder.write(chunk);
+      textHash.update(text);
+      for (const char of text) {
+        if (char === '\n') {
+          if (lineLength) lineLengths.push(lineLength);
+          lineLength = 0;
+        } else {
+          lineLength++;
+          compactLength++;
+          compactHash.update(char);
+        }
+      }
+    }
+    const tail = decoder.end();
+    if (tail) {
+      textHash.update(tail);
+      for (const char of tail) { lineLength++; compactLength++; compactHash.update(char); }
+    }
+    if (lineLength) lineLengths.push(lineLength);
+  } finally { stream.destroy(); }
+  const after = await articleStat(title);
+  if (before.mtimeMs !== after.mtimeMs || before.size !== after.size) throw articleChangedError(title);
+  return {
+    compactLength,
+    lineLengths,
+    lineCount: lineLengths.length,
+    textRevision: textHash.digest('hex'),
+    compactRevision: compactHash.digest('hex'),
+    mtimeMs: after.mtimeMs,
+    size: after.size
+  };
+}
+
+function validateSelection(selection, metadata) {
+  if (!selection || !['compact', 'lines'].includes(selection.type)) throw new Error('无效的文章片段选择。');
+  if (!Number.isSafeInteger(selection.length) || selection.length < 0) throw new Error('文章片段长度无效。');
+  if (selection.type === 'compact') {
+    if (!Number.isSafeInteger(selection.start) || selection.start < 0 || selection.start + selection.length > metadata.compactLength) throw new Error('文章片段范围无效。');
+  } else if (!Array.isArray(selection.indexes) || selection.indexes.some(index => !Number.isSafeInteger(index) || index < 0 || index >= metadata.lineCount)) {
+    throw new Error('文章行号范围无效。');
+  }
+}
+
+export async function readArticleSelection(title, selection, metadata) {
+  validateSelection(selection, metadata);
+  const before = await articleStat(title);
+  if (before.mtimeMs !== metadata.mtimeMs || before.size !== metadata.size) throw articleChangedError(title);
+  const decoder = new StringDecoder('utf8');
+  const stream = fs.createReadStream(articlePath(title));
+  const output = [];
+  const selected = selection.type === 'lines' ? new Map(selection.indexes.map((index, order) => [index, order])) : null;
+  const maxSelectedLine = selected ? Math.max(-1, ...selection.indexes) : -1;
+  const lineParts = selected ? Array.from({ length: selection.indexes.length }, () => []) : null;
+  let compactPosition = 0, lineIndex = 0, lineBuffer = [];
+  let done = selection.length === 0;
+  const consume = text => {
+    for (const char of text) {
+      if (selection.type === 'compact') {
+        if (char !== '\n') {
+          if (compactPosition >= selection.start && output.length < selection.length) output.push(char);
+          compactPosition++;
+          if (output.length >= selection.length) return true;
+        }
+      } else if (char === '\n') {
+        if (lineBuffer.length && selected.has(lineIndex)) lineParts[selected.get(lineIndex)] = lineBuffer;
+        if (lineBuffer.length) {
+          lineIndex++;
+          if (lineIndex > maxSelectedLine) return true;
+        }
+        lineBuffer = [];
+      } else {
+        lineBuffer.push(char);
+      }
+    }
+    return false;
+  };
+  try {
+    if (!done) {
+      for await (const chunk of stream) {
+        if (consume(decoder.write(chunk))) { done = true; break; }
+      }
+      if (!done) {
+        const tail = decoder.end();
+        if (tail) consume(tail);
+        if (selection.type === 'lines' && lineBuffer.length && selected.has(lineIndex)) lineParts[selected.get(lineIndex)] = lineBuffer;
+      }
+    }
+  } finally { stream.destroy(); }
+  if (selection.type === 'lines') {
+    for (const part of lineParts) {
+      for (const char of part) { if (output.length >= selection.length) break; output.push(char); }
+      if (output.length >= selection.length) break;
+    }
+  }
+  const after = await articleStat(title);
+  if (before.mtimeMs !== after.mtimeMs || before.size !== after.size) throw articleChangedError(title);
+  return { text: output.join(''), textRevision: metadata.textRevision, compactRevision: metadata.compactRevision };
 }
 
 export function invalidateArticleView(title) {

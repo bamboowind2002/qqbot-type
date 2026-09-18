@@ -25,6 +25,12 @@ export function randomParagraph(source, length, random = Math.random, index = nu
   return { text: sourceSlice(source, start, length, index), start };
 }
 
+export function randomParagraphSelection(compactLength, length, random = Math.random) {
+  if (compactLength < length) throw new Error(`文章只有 ${compactLength} 字，不足 ${length} 字。`);
+  const start = Math.floor(random() * (compactLength - length + 1));
+  return { type: 'compact', start, length };
+}
+
 export function parseRandomRange(args) {
   const values = [...(args || [])];
   let index = -1, match = null;
@@ -68,4 +74,21 @@ export function randomLines(lines, length, random = Math.random, rangeStart = 0,
   }
   const text = selected.map(index => lines[index]).join('');
   return { text: sliceCodePoints(text, 0, length), indexes: selected };
+}
+
+export function randomLineSelection(lineLengths, length, random = Math.random, rangeStart = 0, rangeEnd = lineLengths.length) {
+  if (!Number.isInteger(rangeStart) || !Number.isInteger(rangeEnd) || rangeStart < 0 || rangeEnd > lineLengths.length || rangeEnd <= rangeStart) throw new Error('乱序下标范围超出文章行数。');
+  const available = lineLengths.slice(rangeStart, rangeEnd).reduce((total, value) => total + value, 0);
+  if (available < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
+  const indexes = Array.from({ length: rangeEnd - rangeStart }, (_, index) => index + rangeStart);
+  const selected = [];
+  let total = 0;
+  while (total < length) {
+    const offset = selected.length + Math.floor(random() * (indexes.length - selected.length));
+    [indexes[selected.length], indexes[offset]] = [indexes[offset], indexes[selected.length]];
+    const index = indexes[selected.length];
+    selected.push(index);
+    total += lineLengths[index];
+  }
+  return { type: 'lines', indexes: selected, length };
 }
