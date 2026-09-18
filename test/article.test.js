@@ -34,6 +34,7 @@ test('parses short and long list commands and preserves direct text only', () =>
   assert.deepEqual(parseArticleCommand('-管 改 1 100 四季。\n.\n替换文本'), { action: 'replace', args: ['1', '100', '四季。'] });
   assert.deepEqual(parseArticleCommand('-发'), { action: '发', args: [], difficulty: false });
   assert.deepEqual(parseArticleCommand('-条件'), { action: '条件', args: [] });
+  assert.deepEqual(parseArticleCommand('-模式'), { action: '模式', args: [], difficulty: false });
   assert.equal(parseArticleCommand('》文 中秋节 2'), null);
 });
 
@@ -43,5 +44,5 @@ test('formats a three-line article message with Unicode character count', () => 
 });
 
 test('includes the main user-facing article commands in built-in help', () => {
-  for (const command of ['-文', '-选', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-上', '-下', '-发', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
+  for (const command of ['-文', '-选', '-模式', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-上', '-下', '-发', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
 });

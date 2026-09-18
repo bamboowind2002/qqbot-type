@@ -217,6 +217,27 @@ async function conditionStatus(e) {
   return send(e, settings.last_condition ? `已保存的自动续段条件：${settings.last_condition}` : '当前没有已设置的自动续段条件。');
 }
 
+async function modeStatus(e) {
+  const session = getArticleSession(sessionKey(e));
+  const settings = await getArticleSettings(consql, userId(e));
+  const mode = session?.mode || settings.last_mode;
+  if (!mode) return send(e, '当前尚未设置发文模式。');
+
+  const labels = {
+    ordered: '顺序发文',
+    paragraph: '随机段落发文',
+    characters: '随机选字发文',
+    difficulty: '难度发文'
+  };
+  const title = session?.title || settings.last_title || settings.current_title;
+  const length = session?.length || settings.segment_length;
+  const details = [`当前发文模式：${labels[mode] || mode}`];
+  if (title) details.push(`文章：${title}`);
+  if (length) details.push(`每段字数：${length}`);
+  if (mode === 'difficulty') details.push(`难度：${session?.difficulty || settings.last_difficulty || '未指定'}`);
+  return send(e, details.join('\n'));
+}
+
 async function continueSession(e, session) {
   touchArticleSession(session);
   if (session.mode === 'difficulty') return difficultyMode(e, session.difficulty, [String(session.length)], session.conditionText);
@@ -287,10 +308,25 @@ bot.on('message', async e => {
     if (!command) return;
     if (command.action === '发') return await repeatLast(e);
     if (command.action === '条件') return await conditionStatus(e);
+    if (command.action === '模式') return await modeStatus(e);
     if (command.action === 'list') return await list(e, command);
     if (command.action === '选' || command.action === '选择文章') {
       if (!command.args?.length) throw new Error('格式：-选 <文章标题>');
-      return await send(e, `已选择文章“${await selectArticle(consql, userId(e), command.args.join(' '))}”。`);
+      const settings = await getArticleSettings(consql, userId(e));
+      const session = getArticleSession(sessionKey(e));
+      const selectedTitle = await selectArticle(consql, userId(e), command.args.join(' '));
+      const currentMode = session?.mode || settings.last_mode;
+      if (currentMode === 'difficulty') {
+        await saveLastArticleConfig(consql, userId(e), {
+          mode: 'ordered',
+          length: session?.length || settings.segment_length || 100,
+          title: selectedTitle,
+          condition: session?.conditionText ?? settings.last_condition ?? ''
+        });
+        closeArticleSession(sessionKey(e));
+        return await send(e, `已选择文章“${selectedTitle}”，当前发文模式已切换为顺序发文。`);
+      }
+      return await send(e, `已选择文章“${selectedTitle}”。`);
     }
     if (command.action === '进' || command.action === '文章进度') return await progress(e, command.args || []);
     if (command.action === '搜' || command.action === '文内搜索') {
