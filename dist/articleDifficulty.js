@@ -103,7 +103,7 @@ export async function chooseDifficultySegmentStreaming(
     const title = sampled?.title || titles[randomIndex(random, titles.length)];
     let metadata;
     try { metadata = sampled
-      ? await readArticleSelectionMetadata(title, sampled.length, sampled.revision)
+      ? await readArticleSelectionMetadata(title, sampled.articleLength, sampled.revision)
       : await scan(title); }
     catch (error) { if (error?.code === 'ENOENT') continue; if (error?.code === 'ARTICLE_CHANGED') continue; throw error; }
     if (metadata.compactLength < length) { await new Promise(resolve => setImmediate(resolve)); continue; }

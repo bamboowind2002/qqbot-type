@@ -19,6 +19,7 @@ test('samples every article/start pair with contiguous weighted ranges', () => {
   ]);
   const samples = [0, 1, 2, 3, 4, 5].map(value => weightedDifficultySelection(index, 3, () => value / 6));
   assert.deepEqual(samples.map(item => `${item.title}:${item.start}`), ['甲:0', '甲:0', '甲:1', '甲:2', '甲:2', '乙:0']);
+  assert.equal(samples[0].articleLength, 5);
 });
 
 test('returns null when no article can contain the requested length', () => {

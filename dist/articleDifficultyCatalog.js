@@ -41,7 +41,7 @@ export function weightedDifficultySelection(index, length, random = Math.random)
   }
   const selected = low;
   const previous = selected === 0 ? 0 : index.prefixLengths[selected - 1] - selected * (length - 1);
-  return { title: index.items[selected].title, start: target - previous, length, revision: index.items[selected].revision };
+  return { title: index.items[selected].title, start: target - previous, length, articleLength: index.items[selected].length, revision: index.items[selected].revision };
 }
 
 export function mysqlQuery(connection, sql, values = []) { return query(connection, sql, values); }
