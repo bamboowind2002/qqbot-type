@@ -1,4 +1,4 @@
-import { get_rank } from './rank.js';
+import { getArticleRank } from './articleDifficulty.js';
 
 export function formatArticleTitle(title) {
   return String(title ?? '').replace(/^皇叔-/u, '皇叔 ');
@@ -6,7 +6,7 @@ export function formatArticleTitle(title) {
 
 export function formatArticleMessage(body, { title = '', segment = '', trigger = '' } = {}) {
   const text = [...String(body ?? '')].filter(char => !/\p{White_Space}/u.test(char)).join('');
-  const [score, , rank] = get_rank(text);
+  const [score, , rank] = getArticleRank(text, title);
   if (!text) throw new Error('正文不能为空。');
   const displayTitle = formatArticleTitle(title);
   const first = displayTitle ? `${displayTitle}-${rank}${score.toFixed(2)}` : `${rank}${score.toFixed(2)}`;

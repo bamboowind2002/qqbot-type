@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chooseDifficultySegment,
+  decryptArticleText,
+  getArticleRank,
+  isEncryptedArticleTitle,
   isDifficultyMatch,
   isValidDifficultyResult,
   normalizeDifficulty
@@ -90,4 +93,14 @@ test('rank analysis keeps negative empty input outside all difficulty ranks', ()
   assert.deepEqual(get_rank('   '), [result.score, result.rankEn, result.rank, result.error]);
   assert.equal(result.score, -1);
   assert.equal(isDifficultyMatch(result.score, '淼'), false);
+});
+
+test('decrypts 皇叔 article text before calculating difficulty', () => {
+  assert.equal(isEncryptedArticleTitle('皇叔-文章'), true);
+  assert.equal(isEncryptedArticleTitle('皇叔 文章'), true);
+  assert.equal(isEncryptedArticleTitle('皇叔文章'), false);
+  assert.equal(decryptArticleText('Ｂ'), 'Ａ');
+  const encrypted = String.fromCharCode('你'.charCodeAt(0) + 1);
+  assert.deepEqual(getArticleRank(encrypted, '皇叔-文章'), get_rank('你'));
+  assert.deepEqual(getArticleRank(encrypted, '普通文章'), get_rank(encrypted));
 });

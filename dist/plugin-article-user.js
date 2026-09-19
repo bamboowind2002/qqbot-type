@@ -6,9 +6,8 @@ import { parseSegmentArguments, parseRandomRange, randomParagraphSelection, rand
 import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
-import { chooseDifficultySegmentStreaming, normalizeDifficulty } from './articleDifficulty.js';
+import { chooseDifficultySegmentStreaming, getArticleRank, normalizeDifficulty } from './articleDifficulty.js';
 import { mysqlQuery } from './articleDifficultyCatalog.js';
-import { get_rank } from './rank.js';
 import { listArticles, scanArticleMetadata, readArticleSelection, readRandomArticleSelection } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 import { toArticleUserMessage } from './articleErrors.js';
@@ -192,9 +191,9 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const titles = listArticles({ sort: false });
   const deadline = Infinity;
   const budget = { attempts: 0 };
-  let result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, null, readRandomArticleSelection, get_rank, Math.random, () => Date.now(), excluded, deadline, budget, consql);
+  let result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, null, readRandomArticleSelection, getArticleRank, Math.random, () => Date.now(), excluded, deadline, budget, consql);
   if (!result && excluded.size && Date.now() <= deadline) {
-    result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, null, readRandomArticleSelection, get_rank, Math.random, () => Date.now(), new Set(), deadline, budget, consql);
+    result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, null, readRandomArticleSelection, getArticleRank, Math.random, () => Date.now(), new Set(), deadline, budget, consql);
   }
   if (!result) throw new Error('没有找到可用段落。');
   await setSegmentLength(consql, userId(e), parsed.length);

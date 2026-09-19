@@ -4,8 +4,7 @@ import dotenv from 'dotenv';
 import mysql from 'mysql';
 import { loadDifficultyIndex, weightedDifficultySelection } from '../dist/articleDifficultyCatalog.js';
 import { readRandomArticleSelection } from '../dist/articleStorage.js';
-import { DIFFICULTY_RANGES } from '../dist/articleDifficulty.js';
-import { get_rank } from '../dist/rank.js';
+import { DIFFICULTY_RANGES, getArticleRank } from '../dist/articleDifficulty.js';
 
 dotenv.config();
 
@@ -109,7 +108,7 @@ export async function collectSamples(index, length, sampleCount, random = Math.r
       indexKey: selected.indexKey
     });
     const text = result.text;
-    const [score, , rank, error] = get_rank(text);
+    const [score, , rank, error] = getArticleRank(text, selected.title);
     counts[classifyDifficulty(score, rank, error)]++;
   }
   return { counts, sampleCount: samples.size };

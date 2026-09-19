@@ -1,5 +1,6 @@
 import { createCodePointIndex, sliceCodePoints } from './unicodeText.js';
 import { getCatalogRevision, loadDifficultyIndex, weightedDifficultySelection, mysqlQuery, bumpCatalogRevision } from './articleDifficultyCatalog.js';
+import { get_rank as getRank } from './rank.js';
 
 export const DIFFICULTY_RANGES = Object.freeze({
   '淼': [0, 0.1], '水': [0.1, 0.3], '易': [0.3, 0.8],
@@ -11,6 +12,26 @@ const VALID_DIFFICULTY_RANKS = new Set(['淼', '水', '易', '普', '难', '虐'
 const MAX_ATTEMPTS = 1000;
 const MAX_DURATION_MS = Number.POSITIVE_INFINITY;
 const difficultyIndexCache = new WeakMap();
+
+export function isEncryptedArticleTitle(title) {
+  return /^皇叔(?:-| )/u.test(String(title ?? ''));
+}
+
+export function decryptArticleText(text) {
+  let result = '';
+  for (let index = 0; index < String(text).length; index++) {
+    result += String.fromCharCode(String(text).charCodeAt(index) - 1);
+  }
+  return result;
+}
+
+export function getArticleRank(text, title = '') {
+  return getRankForArticle(text, title);
+}
+
+function getRankForArticle(text, title) {
+  return getRank(isEncryptedArticleTitle(title) ? decryptArticleText(text) : text);
+}
 
 export function isValidDifficultyResult(score, rank, error = false) {
   return !error && Number.isFinite(score) && score >= 0 && VALID_DIFFICULTY_RANKS.has(rank);
@@ -64,7 +85,7 @@ export function chooseDifficultySegment(
     if (excluded.has(`${article.title}:${start}`)) continue;
 
     const text = sliceCodePoints(article.text, start, length, article.textIndex);
-    const [score, , rank, error] = getRank(text);
+    const [score, , rank, error] = getRank(text, article.title);
     if (!isValidDifficultyResult(score, rank, error) || !isDifficultyMatch(score, difficulty)) continue;
     return { title: article.title, text, start, score, rank, attempts };
   }
@@ -115,7 +136,7 @@ export async function chooseDifficultySegmentStreaming(
       try { selected = await read(title, { type: 'compact', start, length }, metadata); }
       catch (error) { if (error?.code === 'ARTICLE_CHANGED') continue; throw error; }
       if ([...selected.text].length !== length) continue;
-      const [score, , rank, error] = getRank(selected.text);
+      const [score, , rank, error] = getRank(selected.text, title);
       if (isValidDifficultyResult(score, rank, error) && isDifficultyMatch(score, difficulty)) return { title, text: selected.text, start, score, rank, attempts, revision: selected.compactRevision };
       await new Promise(resolve => setImmediate(resolve));
       continue;
@@ -136,7 +157,7 @@ export async function chooseDifficultySegmentStreaming(
       throw error;
     }
     if ([...selected.text].length !== length) { await new Promise(resolve => setImmediate(resolve)); continue; }
-    const [score, , rank, error] = getRank(selected.text);
+    const [score, , rank, error] = getRank(selected.text, title);
     if (isValidDifficultyResult(score, rank, error) && isDifficultyMatch(score, difficulty)) return { title, text: selected.text, start, score, rank, attempts, revision: selected.compactRevision };
     await new Promise(resolve => setImmediate(resolve));
   }

@@ -3,8 +3,7 @@ import { listArticles, scanArticleMetadata, readArticleSelection } from '../dist
 import { readArticle, searchArticle, clampProgress } from '../dist/articleUser.js';
 import { parseSegmentArguments, parseRandomRange, randomParagraphSelection, randomLineSelection } from '../dist/articleModes.js';
 import { formatArticleMessage } from '../dist/articleMessage.js';
-import { chooseDifficultySegmentStreaming } from '../dist/articleDifficulty.js';
-import { get_rank } from '../dist/rank.js';
+import { chooseDifficultySegmentStreaming, getArticleRank } from '../dist/articleDifficulty.js';
 
 export function parseCliLine(line) {
   const text = String(line || '').trim();
@@ -84,7 +83,7 @@ export async function runCli({ input = process.stdin, output = process.stdout } 
       if (command === '难' || command === 'difficulty') {
         if (!args[0]) throw new Error('格式：难 <淼|水|易|普|难|虐|爆表> [字数]');
         const difficulty = args[0], parsedLength = parseSegmentArguments(args.slice(1), state.length); state.length = parsedLength.length;
-        const result = await chooseDifficultySegmentStreaming(names(), parsedLength.length, difficulty, scanArticleMetadata, readArticleSelection, get_rank); if (!result) throw new Error('没有找到可用段落。');
+        const result = await chooseDifficultySegmentStreaming(names(), parsedLength.length, difficulty, scanArticleMetadata, readArticleSelection, getArticleRank); if (!result) throw new Error('没有找到可用段落。');
         send(result.text, result.title); continue;
       }
       if (command === '搜' || command === 'search') {
