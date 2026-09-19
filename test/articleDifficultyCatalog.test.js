@@ -22,6 +22,11 @@ test('samples every article/start pair with contiguous weighted ranges', () => {
   assert.equal(samples[0].articleLength, 5);
 });
 
+test('keeps the selected article index key', () => {
+  const index = buildDifficultyIndex([{ title: '文章', char_count: 10, index_key: 'a'.repeat(64) }]);
+  assert.equal(weightedDifficultySelection(index, 3, () => 0).indexKey, 'a'.repeat(64));
+});
+
 test('returns null when no article can contain the requested length', () => {
   const index = buildDifficultyIndex([{ title: '短', char_count: 2 }]);
   assert.equal(weightedDifficultySelection(index, 3), null);
