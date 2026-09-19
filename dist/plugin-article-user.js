@@ -164,9 +164,9 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const titles = listArticles({ sort: false });
   const deadline = Date.now() + 5000;
   const budget = { attempts: 0 };
-  let result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, scanArticleMetadata, readArticleSelection, get_rank, Math.random, () => Date.now(), excluded, deadline, budget);
+  let result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, scanArticleMetadata, readArticleSelection, get_rank, Math.random, () => Date.now(), excluded, deadline, budget, consql);
   if (!result && excluded.size && Date.now() <= deadline) {
-    result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, scanArticleMetadata, readArticleSelection, get_rank, Math.random, () => Date.now(), new Set(), deadline, budget);
+    result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, scanArticleMetadata, readArticleSelection, get_rank, Math.random, () => Date.now(), new Set(), deadline, budget, consql);
   }
   if (!result) throw new Error('没有找到可用段落。');
   await setSegmentLength(consql, userId(e), parsed.length);

@@ -25,7 +25,7 @@ export function parseArticleCommand(raw) {
     if (op === '确认' && rest[0] === '删除') { op = '确认删除'; rest.shift(); }
     if (op === '分类') {
       const sub = rest.shift() || '帮助';
-      const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list', '重命名': 'category-rename', '改名': 'category-rename' };
+      const categoryMap = { '添加': 'category-add', '删除': 'category-remove', '列表': 'category-list', '重命名': 'category-rename', '改名': 'category-rename', '难度列表': 'category-difficulty-list', '难度查看': 'category-difficulty-view', '难度启用': 'category-difficulty-enable', '难度停用': 'category-difficulty-disable' };
       return { action: categoryMap[sub] || 'category-help', args: rest };
     }
     const map = { '传': 'upload', '上传': 'upload', '批传': 'batch-upload', '批量传': 'batch-upload', '批量上传': 'batch-upload', '改': 'replace', '替换': 'replace', '重命名': 'article-rename', '文章重命名': 'article-rename', '文章改名': 'article-rename', '删': 'delete', '删除': 'delete', '确认': 'confirm-delete', '确认删除': 'confirm-delete' };
@@ -78,4 +78,6 @@ export const ARTICLE_HELP = `发文帮助
 -管 分类 重命名 <旧分类名> <新分类名>：重命名分类
 -管 重命名 <旧标题> <新标题>：重命名文章
 -管 分类 列表：查看分类
+-管 分类 难度列表/难度查看 <分类名>：查看难度发文取样分类
+-管 分类 难度启用/难度停用 <分类名>：切换分类是否进入难度发文池
 -管 传/改/删：管理文章；-管 分类：管理文章分类`;

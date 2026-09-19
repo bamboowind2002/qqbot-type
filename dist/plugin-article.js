@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { randomInt, createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,11 +9,18 @@ import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText } from './articleStorage.js';
-import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName } from './articleCategories.js';
+import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata } from './articleStorage.js';
+import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName, listCategories, listCategoryArticles } from './articleCategories.js';
+import { addArticleCategoryRecord, listArticleCategoryDifficulty, removeArticleCategoryRecord, removeArticleCatalog, renameArticleCategoryRecord, setArticleCategoryDifficulty, syncArticleDifficultyCatalog, upsertArticleCatalog } from './articleDifficultyCatalog.js';
 import { articleBatchErrorMessage, toArticleUserMessage } from './articleErrors.js';
 
 const deleteTokens = new Map();
+syncArticleDifficultyCatalog(
+  consql,
+  new Set(listArticles({ sort: false })),
+  scanArticleMetadata,
+  listCategories().map(category => ({ category, titles: listCategoryArticles(category) }))
+).catch(error => console.error('[plugin-article] difficulty catalog sync failed:', error.message || error));
 function articleEventContext(e) {
   return {
     messageId: e.message_id,
@@ -75,6 +82,9 @@ async function renameArticleReferences(oldTitle, newTitle) {
     await query('update article_progress set title = ? where title = ?', [newTitle, oldTitle]);
     await query('update article_user_settings set current_title = ? where current_title = ?', [newTitle, oldTitle]);
     await query('update article_user_settings set last_title = ? where last_title = ?', [newTitle, oldTitle]);
+    await query('update article_catalog set title = ? where title = ?', [newTitle, oldTitle]);
+    await query('update article_category_members set title = ? where title = ?', [newTitle, oldTitle]);
+    await query('insert into article_catalog_state (singleton_id, revision) values (1, 1) on duplicate key update revision = revision + 1');
   });
 }
 
@@ -160,7 +170,9 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
       const entry = entries[index];
       try {
         const result = await saveBatchArticle(entry.title, entry.text);
+        await upsertArticleCatalog(consql, { title: entry.title, chars: [...entry.text.replace(/\n/gu, '')].length, bytes: Buffer.byteLength(entry.text), sha256: createHash('sha256').update(entry.text).digest('hex') });
         await addArticleCategory(category, entry.title);
+        await addArticleCategoryRecord(consql, category, entry.title);
         results.push(result);
       } catch (err) { skipped.push({ file: `${entry.title}.txt`, reason: articleBatchErrorMessage(err) }); }
       await onProgress({ phase: '上传', processed: validationSkipped + index + 1, total: files.length, success: results.length, skipped: skipped.length });
@@ -178,15 +190,35 @@ async function handleAdmin(e, command) {
     if (args.length) throw new Error('格式：-管 分类 列表');
     return sendCategoryList(e);
   }
+  if (command.action === 'category-difficulty-list') {
+    if (args.length) throw new Error('格式：-管 分类 难度列表');
+    const rows = await listArticleCategoryDifficulty(consql);
+    return send(e, rows.length ? `难度取样分类：\n${rows.map(row => `${row.category}（${row.difficulty_enabled ? '启用' : '停用'}，${row.article_count}篇）`).join('\n')}` : '暂无分类。');
+  }
+  if (['category-difficulty-enable', 'category-difficulty-disable', 'category-difficulty-view'].includes(command.action)) {
+    if (args.length !== 1) throw new Error(`格式：-管 分类 ${command.action === 'category-difficulty-view' ? '难度查看' : command.action.endsWith('enable') ? '难度启用' : '难度停用'} <分类名>`);
+    const category = validateCategoryName(args[0]);
+    if (command.action === 'category-difficulty-view') {
+      const rows = (await listArticleCategoryDifficulty(consql)).filter(row => row.category === category);
+      if (!rows.length) throw new Error(`分类“${category}”不存在。`);
+      const row = rows[0];
+      return send(e, `分类“${category}”：难度取样${row.difficulty_enabled ? '启用' : '停用'}，${row.article_count}篇。`);
+    }
+    await setArticleCategoryDifficulty(consql, category, command.action === 'category-difficulty-enable');
+    return send(e, `分类“${category}”已${command.action === 'category-difficulty-enable' ? '加入' : '移出'}难度发文取样池。`);
+  }
   if (command.action === 'category-rename') {
     if (args.length !== 2) throw new Error('格式：-管 分类 重命名 <旧分类名> <新分类名>');
     const result = await renameArticleCategory(args[0], args[1]);
+    await renameArticleCategoryRecord(consql, result.oldCategory, result.newCategory);
     return send(e, `分类“${result.oldCategory}”已重命名为“${result.newCategory}”。`);
   }
   if (command.action === 'category-add' || command.action === 'category-remove') {
     if (args.length < 2) throw new Error(`格式：-管 分类 ${command.action === 'category-add' ? '添加' : '删除'} <分类名> <文章标题>`);
     const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
     const result = command.action === 'category-add' ? await addArticleCategory(category, title) : await removeArticleCategory(category, title);
+    if (command.action === 'category-add') await addArticleCategoryRecord(consql, category, title);
+    else await removeArticleCategoryRecord(consql, category, title);
     return send(e, command.action === 'category-add' ? `文章“${result.title}”已${result.existed ? '在' : '加入'}分类“${result.category}”。` : `文章“${result.title}”已从分类“${result.category}”移除。`);
   }
   if (command.action === 'article-rename') {
@@ -210,7 +242,9 @@ async function handleAdmin(e, command) {
     if (args.length < 2) throw new Error('格式：-管 传 <分类> <文章标题>');
     const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
     const result = await saveArticle(title, (await findUploadFile(e, '.txt')).buffer);
+    await upsertArticleCatalog(consql, result);
     await addArticleCategory(category, title);
+    await addArticleCategoryRecord(consql, category, title);
     return send(e, `文章“${result.title}”上传成功，共 ${result.chars} 字，已加入分类“${category}”。`);
   }
   if (command.action === 'batch-upload') {
@@ -228,6 +262,7 @@ async function handleAdmin(e, command) {
     const lines = String(e.raw_message || '').split(/\r?\n/);
     if (lines.length < 2) throw new Error('请在第二行填写正则表达式。');
     const result = await replaceArticleRange(args.slice(2).join(' '), Number(args[0]), Number(args[1]), lines[1], lines.slice(2).join('\n'));
+    await upsertArticleCatalog(consql, result);
     return send(e, `文章“${result.title}”替换成功，共 ${result.chars} 字。`);
   }
   if (command.action === 'delete') {
@@ -240,7 +275,7 @@ async function handleAdmin(e, command) {
   if (command.action === 'confirm-delete') {
     const key = `${e.sender.user_id}:${args[0]}`, pending = deleteTokens.get(key);
     if (!pending || pending.expires < Date.now()) { deleteTokens.delete(key); throw new Error('确认码不存在或已过期。'); }
-    deleteTokens.delete(key); await deleteArticle(pending.title); return send(e, `文章“${pending.title}”已删除。`);
+    deleteTokens.delete(key); await deleteArticle(pending.title); await removeArticleCatalog(consql, pending.title); return send(e, `文章“${pending.title}”已删除。`);
   }
 }
 
@@ -254,7 +289,7 @@ bot.on('message', async e => {
     if (command.action === 'help') return await send(e, ARTICLE_HELP);
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
-    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename'].includes(command.action)) return await handleAdmin(e, command);
+    if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename', 'category-difficulty-list', 'category-difficulty-view', 'category-difficulty-enable', 'category-difficulty-disable'].includes(command.action)) return await handleAdmin(e, command);
   } catch (err) {
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.error('[plugin-article] command failed', { ...articleEventContext(e), isAdmin, error: err?.message || String(err), stack: err?.stack });
