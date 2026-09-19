@@ -11,22 +11,31 @@ dotenv.config();
 function usage() {
   return `用法：
   node scripts/delete-articles.mjs --titles-file=<文件>
+  node scripts/delete-articles.mjs --pattern=<正则>
   node scripts/delete-articles.mjs --titles-file=<文件> --apply --confirm=DELETE
+  node scripts/delete-articles.mjs --pattern=<正则> --apply --confirm=DELETE
 
 清单格式：每行一个文章标题；空行和以 # 开头的行会被忽略。
+--pattern 按 JavaScript Unicode 正则匹配数据库中的文章标题。
 默认只预览，不会删除任何内容。`;
 }
 
 export function parseArguments(args) {
-  const options = { apply: false, confirm: null, titlesFile: null };
+  const options = { apply: false, confirm: null, titlesFile: null, pattern: null };
   for (const arg of args) {
     if (arg === '--apply') options.apply = true;
     else if (arg.startsWith('--confirm=')) options.confirm = arg.slice('--confirm='.length);
     else if (arg.startsWith('--titles-file=')) options.titlesFile = arg.slice('--titles-file='.length);
+    else if (arg.startsWith('--pattern=')) options.pattern = arg.slice('--pattern='.length);
     else if (arg === '--help' || arg === '-h') return { help: true };
     else throw new Error(`未知参数：${arg}\n${usage()}`);
   }
-  if (!options.titlesFile) throw new Error(`必须指定 --titles-file。\n${usage()}`);
+  if (!options.titlesFile && !options.pattern) throw new Error(`必须指定 --titles-file 或 --pattern。\n${usage()}`);
+  if (options.titlesFile && options.pattern) throw new Error('--titles-file 和 --pattern 只能二选一。');
+  if (options.pattern) {
+    try { options.pattern = new RegExp(options.pattern, 'u'); }
+    catch (error) { throw new Error(`正则无效：${error.message}`); }
+  }
   if (options.apply && options.confirm !== 'DELETE') {
     throw new Error('真正删除必须同时指定 --apply --confirm=DELETE。');
   }
@@ -86,6 +95,14 @@ async function findExistingTitles(connection, titles) {
   return titles.filter(title => existing.has(title));
 }
 
+async function findPatternTitles(connection, pattern) {
+  const rows = await query(connection, 'select title from article_catalog order by title');
+  return rows.map(row => String(row.title)).filter(title => {
+    pattern.lastIndex = 0;
+    return pattern.test(title);
+  });
+}
+
 export async function deleteOneArticle(connection, title) {
   const rows = await query(connection, 'select index_key from article_catalog where title = ? limit 1', [title]);
   const indexKey = rows[0]?.index_key || null;
@@ -103,15 +120,19 @@ async function main(args = process.argv.slice(2)) {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const titles = parseTitleList(await fs.readFile(options.titlesFile, 'utf8'));
-  if (!titles.length) throw new Error('标题清单为空。');
+  const titles = options.titlesFile ? parseTitleList(await fs.readFile(options.titlesFile, 'utf8')) : null;
+  if (titles && !titles.length) throw new Error('标题清单为空。');
 
   const connection = mysql.createConnection(databaseConfigFromEnvironment());
   try {
-    const existing = await findExistingTitles(connection, titles);
+    const existing = options.pattern
+      ? await findPatternTitles(connection, options.pattern)
+      : await findExistingTitles(connection, titles);
     const existingSet = new Set(existing);
-    const missing = titles.filter(title => !existingSet.has(title));
-    process.stdout.write(`清单标题：${titles.length} 个\n`);
+    const missing = titles ? titles.filter(title => !existingSet.has(title)) : [];
+    process.stdout.write(options.pattern
+      ? `匹配正则：${options.pattern.source}\n`
+      : `清单标题：${titles.length} 个\n`);
     process.stdout.write(`数据库中存在：${existing.length} 个\n`);
     process.stdout.write(`数据库中不存在：${missing.length} 个\n`);
     if (missing.length) process.stdout.write(`跳过：${missing.join('、')}\n`);
