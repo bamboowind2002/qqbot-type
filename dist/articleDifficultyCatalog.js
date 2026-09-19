@@ -100,6 +100,16 @@ export async function ensureExistingArticleCategory(connection, category) {
 }
 
 export async function syncArticleDifficultyCatalog(connection, titles, scanMetadata, categoryEntries) {
+  for (const category of categoryEntries) {
+    await ensureExistingArticleCategory(connection, category.category);
+    const validTitles = category.titles.filter(title => titles.has(title));
+    for (let offset = 0; offset < validTitles.length; offset += 1000) {
+      const chunk = validTitles.slice(offset, offset + 1000);
+      if (!chunk.length) continue;
+      await query(connection, `insert ignore into article_category_members (category, title) values ${chunk.map(() => '(?, ?)').join(',')}`,
+        chunk.flatMap(title => [category.category, title]));
+    }
+  }
   const existingRows = titles.size
     ? await query(connection, 'select title from article_catalog where title in (?)', [[...titles]])
     : [];
@@ -111,12 +121,6 @@ export async function syncArticleDifficultyCatalog(connection, titles, scanMetad
       values (?, ?, ?, ?)
       on duplicate key update char_count = values(char_count), byte_count = values(byte_count), content_sha256 = values(content_sha256)`,
     [title, metadata.compactLength, metadata.size, metadata.textRevision]);
-  }
-  for (const category of categoryEntries) {
-    await ensureExistingArticleCategory(connection, category.category);
-    for (const title of category.titles) {
-      if (titles.has(title)) await query(connection, `insert ignore into article_category_members (category, title) values (?, ?)`, [category.category, title]);
-    }
   }
   await bumpCatalogRevision(connection);
 }
