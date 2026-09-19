@@ -1,5 +1,6 @@
 import { createCodePointIndex, sliceCodePoints } from './unicodeText.js';
 import { getCatalogRevision, loadDifficultyIndex, weightedDifficultySelection } from './articleDifficultyCatalog.js';
+import { readArticleSelectionMetadata } from './articleStorage.js';
 
 export const DIFFICULTY_RANGES = Object.freeze({
   '淼': [0, 0.1], '水': [0.1, 0.3], '易': [0.3, 0.8],
@@ -101,7 +102,9 @@ export async function chooseDifficultySegmentStreaming(
     if (difficultyIndex && !sampled) throw new Error(`没有长度达到 ${length} 字的文章。`);
     const title = sampled?.title || titles[randomIndex(random, titles.length)];
     let metadata;
-    try { metadata = await scan(title); }
+    try { metadata = sampled
+      ? await readArticleSelectionMetadata(title, sampled.length, sampled.revision)
+      : await scan(title); }
     catch (error) { if (error?.code === 'ENOENT') continue; if (error?.code === 'ARTICLE_CHANGED') continue; throw error; }
     if (metadata.compactLength < length) { await new Promise(resolve => setImmediate(resolve)); continue; }
     const start = sampled?.start ?? randomIndex(random, metadata.compactLength - length + 1);
@@ -109,6 +112,7 @@ export async function chooseDifficultySegmentStreaming(
     let selected;
     try { selected = await read(title, { type: 'compact', start, length }, metadata); }
     catch (error) { if (error?.code === 'ARTICLE_CHANGED') { await new Promise(resolve => setImmediate(resolve)); continue; } throw error; }
+    if ([...selected.text].length !== length) { await new Promise(resolve => setImmediate(resolve)); continue; }
     const [score, , rank, error] = getRank(selected.text);
     if (isValidDifficultyResult(score, rank, error) && isDifficultyMatch(score, difficulty)) return { title, text: selected.text, start, score, rank, attempts, revision: selected.compactRevision };
     await new Promise(resolve => setImmediate(resolve));

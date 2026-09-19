@@ -246,6 +246,22 @@ export async function scanArticleMetadata(title) {
   return cloneArticleMetadata(metadata);
 }
 
+// Difficulty sampling already has the compact length in article_catalog. Avoid
+// scanning the whole article again just to obtain the stat fields required by
+// readArticleSelection.
+export async function readArticleSelectionMetadata(title, compactLength, revision = null) {
+  const stat = await articleStat(title);
+  return {
+    compactLength,
+    lineLengths: [],
+    lineCount: 0,
+    textRevision: revision,
+    compactRevision: revision,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size
+  };
+}
+
 function validateSelection(selection, metadata) {
   if (!selection || !['compact', 'lines'].includes(selection.type)) throw new Error('无效的文章片段选择。');
   if (!Number.isSafeInteger(selection.length) || selection.length < 0) throw new Error('文章片段长度无效。');
