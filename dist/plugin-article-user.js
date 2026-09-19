@@ -7,6 +7,7 @@ import { formatArticleMessage } from './articleMessage.js';
 import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
 import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { chooseDifficultySegmentStreaming, normalizeDifficulty } from './articleDifficulty.js';
+import { mysqlQuery } from './articleDifficultyCatalog.js';
 import { get_rank } from './rank.js';
 import { listArticles, scanArticleMetadata, readArticleSelection, readRandomArticleSelection } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
@@ -16,13 +17,40 @@ const send = (e, value) => e.quick_action([Structs.text(String(value))]);
 const userId = e => String(e.sender?.user_id ?? e.user_id);
 const triggerName = e => String(e.sender?.card || e.sender?.nickname || e.sender?.user_id || '未知用户');
 
-async function readStableArticleSelection(title, makeSelection, attempts = 2) {
+async function readCatalogArticleMetadata(title) {
+  const rows = await mysqlQuery(consql, 'select char_count, index_status, index_key from article_catalog where title = ? limit 1', [title]);
+  const row = rows[0];
+  if (row && row.index_status === 'ready' && /^[0-9a-f]{64}$/u.test(String(row.index_key))) {
+    const compactLength = Number(row.char_count);
+    if (Number.isSafeInteger(compactLength) && compactLength >= 0) {
+      return { compactLength, lineLengths: [], lineCount: 0, textRevision: row.index_key, compactRevision: row.index_key, indexKey: row.index_key };
+    }
+  }
+  return scanArticleMetadata(title);
+}
+
+async function readCompactArticleSelection(title, selection, metadata) {
+  if (metadata.indexKey) {
+    return readRandomArticleSelection(title, {
+      start: selection.start,
+      length: selection.length,
+      articleLength: metadata.compactLength,
+      indexKey: metadata.indexKey
+    });
+  }
+  return readArticleSelection(title, selection, metadata);
+}
+
+async function readStableArticleSelection(title, makeSelection, attempts = 2, useOffsetIndex = false) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const metadata = await scanArticleMetadata(title);
+    const metadata = useOffsetIndex ? await readCatalogArticleMetadata(title) : await scanArticleMetadata(title);
     try {
       const selection = makeSelection(metadata);
-      return { metadata, selected: await readArticleSelection(title, selection, metadata) };
+      const selected = selection.type === 'compact' && useOffsetIndex
+        ? await readCompactArticleSelection(title, selection, metadata)
+        : await readArticleSelection(title, selection, metadata);
+      return { metadata, selected };
     } catch (error) {
       if (error?.code !== 'ARTICLE_CHANGED') throw error;
       lastError = error;
@@ -58,22 +86,22 @@ async function deliverOrderedSegment(e, { title, text, bodyRevision, articleLeng
 
 async function sendNextOrderedSegment(e, title, length, conditionText = '') {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
-    const metadata = await scanArticleMetadata(title), articleLength = metadata.compactLength;
+    const metadata = await readCatalogArticleMetadata(title), articleLength = metadata.compactLength;
     const state = await getProgressState(consql, userId(e), title);
     const repeat = resolveOrderedRepeat(state, length, articleLength);
     if (repeat.completed) return reportOrderedExhausted(e, title);
-    const selected = await readArticleSelection(title, { type: 'compact', start: repeat.range.start, length: repeat.range.end - repeat.range.start }, metadata);
+    const selected = await readCompactArticleSelection(title, { type: 'compact', start: repeat.range.start, length: repeat.range.end - repeat.range.start }, metadata);
     return deliverOrderedSegment(e, { title, text: selected.text, bodyRevision: selected.compactRevision, articleLength, ...repeat.range, conditionText });
   });
 }
 
 async function sendFollowingOrderedSegment(e, title, length, conditionText = '') {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
-    const metadata = await scanArticleMetadata(title), articleLength = metadata.compactLength;
+    const metadata = await readCatalogArticleMetadata(title), articleLength = metadata.compactLength;
     const state = await getProgressState(consql, userId(e), title);
     const range = nextOrderedRange(state, length, articleLength);
     if (!range) return reportOrderedExhausted(e, title);
-    const selected = await readArticleSelection(title, { type: 'compact', start: range.start, length: range.end - range.start }, metadata);
+    const selected = await readCompactArticleSelection(title, { type: 'compact', start: range.start, length: range.end - range.start }, metadata);
     return deliverOrderedSegment(e, { title, text: selected.text, bodyRevision: selected.compactRevision, articleLength, ...range, conditionText });
   });
 }
@@ -85,7 +113,7 @@ async function list(e, command) {
   const page = Math.max(1, command.page || 1), size = 50;
   const pageNames = names.slice((page - 1) * size, page * size);
   const display = command.showLength
-    ? await Promise.all(pageNames.map(async title => `${title}（${(await scanArticleMetadata(title)).compactLength}字）`))
+    ? await Promise.all(pageNames.map(async title => `${title}（${(await readCatalogArticleMetadata(title)).compactLength}字）`))
     : pageNames;
   return send(e, `文章列表（${page}/${Math.max(1, Math.ceil(names.length / size))}，共 ${names.length} 篇）\n${display.join('\n')}`);
 }
@@ -93,7 +121,7 @@ async function list(e, command) {
 async function progress(e, args) {
   const settings = await getArticleSettings(consql, userId(e));
   if (!settings.current_title) return send(e, '尚未选择文章，请先发送“-选 <标题>”。');
-  const title = settings.current_title, length = (await scanArticleMetadata(title)).compactLength;
+  const title = settings.current_title, length = (await readCatalogArticleMetadata(title)).compactLength;
   const oldPosition = (await getProgress(consql, userId(e), title)) ?? 0;
   const expression = args.join(' ').trim();
   let position = oldPosition;
@@ -142,7 +170,7 @@ async function articleMode(e, mode, args) {
     const start = randomArgs.range ? randomArgs.range.start - 1 : 0;
     const end = randomArgs.range ? randomArgs.range.end : current.lineCount;
     return randomLineSelection(current.lineLengths, parsed.length, Math.random, start, end);
-  });
+  }, 2, mode === 'paragraph');
   const displayTitle = mode === 'characters'
     ? `${title}（乱序${randomArgs.range ? `第${randomArgs.range.start}-${randomArgs.range.end}行` : '全文'}）`
     : title;
@@ -181,7 +209,7 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
 
 async function repeatOrdered(e, title, length, conditionText = '', session = null) {
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
-    const metadata = await scanArticleMetadata(title), articleLength = metadata.compactLength;
+    const metadata = await readCatalogArticleMetadata(title), articleLength = metadata.compactLength;
     const state = await getProgressState(consql, userId(e), title);
     const repeat = resolveOrderedRepeat(state, length, articleLength);
     if (session?.lastMessage && session.articleRevision === metadata.compactRevision && isOrderedSessionCurrent(session, state, articleLength)) {
@@ -190,7 +218,7 @@ async function repeatOrdered(e, title, length, conditionText = '', session = nul
     }
     if (session) closeArticleSession(sessionKey(e));
     if (repeat.completed) return reportOrderedExhausted(e, title);
-    const selected = await readArticleSelection(title, { type: 'compact', start: repeat.range.start, length: repeat.range.end - repeat.range.start }, metadata);
+    const selected = await readCompactArticleSelection(title, { type: 'compact', start: repeat.range.start, length: repeat.range.end - repeat.range.start }, metadata);
     return deliverOrderedSegment(e, { title, text: selected.text, bodyRevision: selected.compactRevision, articleLength, ...repeat.range, conditionText });
   });
 }
@@ -215,7 +243,9 @@ async function repeatLast(e) {
   const session = getArticleSession(sessionKey(e));
   if (session?.lastMessage) {
     if (session.mode === 'ordered') return repeatOrdered(e, session.title, session.length, session.conditionText, session);
-    const metadata = await scanArticleMetadata(session.title);
+    const metadata = session.mode === 'characters'
+      ? await scanArticleMetadata(session.title)
+      : await readCatalogArticleMetadata(session.title);
     const revision = session.mode === 'characters' ? metadata.textRevision : metadata.compactRevision;
     if (session.articleRevision === revision) {
       touchArticleSession(session);
@@ -272,12 +302,12 @@ async function sendPreviousOrderedSegment(e, session) {
   if (mode !== 'ordered' || !title) throw new Error('只有顺序发文支持回到上一段。');
   const conditionText = session?.conditionText ?? settings.last_condition ?? '';
   return withOrderedLock(orderedLockKey(userId(e), title), async () => {
-    const metadata = await scanArticleMetadata(title), articleLength = metadata.compactLength;
+    const metadata = await readCatalogArticleMetadata(title), articleLength = metadata.compactLength;
     const state = await getProgressState(consql, userId(e), title);
     const length = Number(session?.length || settings.segment_length || 100);
     const range = previousOrderedRange(state, length, articleLength);
     if (!range || range.atBeginning) throw new Error('已经是第一段，无法上一段。');
-    const selected = await readArticleSelection(title, { type: 'compact', start: range.start, length: range.end - range.start }, metadata);
+    const selected = await readCompactArticleSelection(title, { type: 'compact', start: range.start, length: range.end - range.start }, metadata);
     return deliverOrderedSegment(e, { title, text: selected.text, bodyRevision: selected.compactRevision, articleLength, ...range, conditionText });
   });
 }
@@ -307,7 +337,7 @@ async function handleScore(e) {
   const session = getArticleSession(sessionKey(e));
   if (!session || score.segment !== session.segment || !session.condition(score.metrics)) return;
   if (session.mode === 'ordered') {
-    const metadata = await scanArticleMetadata(session.title), articleLength = metadata.compactLength;
+    const metadata = await readCatalogArticleMetadata(session.title), articleLength = metadata.compactLength;
     const state = await getProgressState(consql, userId(e), session.title);
     if (state.position >= articleLength) {
       return reportOrderedExhausted(e, session.title);
