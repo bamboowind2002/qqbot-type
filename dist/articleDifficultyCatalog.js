@@ -100,7 +100,12 @@ export async function ensureExistingArticleCategory(connection, category) {
 }
 
 export async function syncArticleDifficultyCatalog(connection, titles, scanMetadata, categoryEntries) {
+  const existingRows = titles.size
+    ? await query(connection, 'select title from article_catalog where title in (?)', [[...titles]])
+    : [];
+  const existing = new Set(existingRows.map(row => row.title));
   for (const title of titles) {
+    if (existing.has(title)) continue;
     const metadata = await scanMetadata(title);
     await query(connection, `insert into article_catalog (title, char_count, byte_count, content_sha256)
       values (?, ?, ?, ?)
