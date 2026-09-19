@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeArticleText, compactArticleText, splitArticleLines, validateArticleTitle } from '../dist/articleStorage.js';
 import { parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from '../dist/articleCommands.js';
-import { formatArticleMessage } from '../dist/articleMessage.js';
+import { formatArticleMessage, formatArticleTitle } from '../dist/articleMessage.js';
 
 test('normalizes BOM and whitespace while preserving line breaks', () => {
   const text = normalizeArticleText(Buffer.from('\ufeff 你\n 好\t', 'utf8'));
@@ -43,6 +43,13 @@ test('parses short and long list commands and preserves direct text only', () =>
 test('formats a three-line article message with Unicode character count', () => {
   const result = formatArticleMessage('你\n好😀', { title: '测试', segment: '12345', trigger: '昵称' });
   assert.match(result, /^测试-(?:淼|水|易|普|难|虐|爆表)\d+\.\d{2}\n你好😀\n-----第12345段-共3字-昵称$/);
+});
+
+test('replaces the special article title prefix only in the output title', () => {
+  assert.equal(formatArticleTitle('皇叔-文章'), '皇叔 文章');
+  assert.equal(formatArticleTitle('皇叔-文章（乱序全文）'), '皇叔 文章（乱序全文）');
+  assert.equal(formatArticleTitle('前缀皇叔-文章'), '前缀皇叔-文章');
+  assert.match(formatArticleMessage('你好', { title: '皇叔-文章', segment: '12345' }), /^皇叔 文章-/u);
 });
 
 test('includes the main user-facing article commands in built-in help', () => {
