@@ -155,7 +155,7 @@ async function articleMode(e, mode, args) {
   const settings = await getArticleSettings(consql, userId(e));
   const randomArgs = mode === 'characters' ? parseRandomRange(args || []) : { args: args || [], range: null };
   const split = randomArgs.args.join(' ').split(/\s*\|\s*/u);
-  const parsed = parseSegmentArguments(split[0].trim().split(/\s+/).filter(Boolean), Number(settings.segment_length) || 100);
+  const parsed = parseSegmentArguments(split[0].trim().split(/\s+/).filter(Boolean), Number(settings.segment_length) || 100, mode === 'characters' ? '行' : '字');
   const condition = split.length > 1 ? split.slice(1).join('|').trim() : '';
   let title = parsed.title || settings.current_title;
   if (!title) throw new Error('尚未选择文章，请先发送“-选 <标题>”或在命令后附文章标题。');
@@ -278,7 +278,7 @@ async function modeStatus(e) {
   const length = session?.length || settings.segment_length;
   const details = [`当前发文模式：${labels[mode] || mode}`];
   if (title) details.push(`文章：${title}`);
-  if (length) details.push(`每段字数：${length}`);
+  if (length) details.push(`每段${mode === 'characters' ? '行数' : '字数'}：${length}`);
   if (mode === 'difficulty') details.push(`难度：${session?.difficulty || settings.last_difficulty || '未指定'}`);
   return send(e, details.join('\n'));
 }

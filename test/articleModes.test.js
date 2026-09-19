@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters, randomLines } from '../dist/articleModes.js';
+import { parseSegmentArguments, parseRandomRange, orderedSegment, randomParagraph, randomCharacters, randomLines, randomLineSelection } from '../dist/articleModes.js';
 import { createCodePointIndex } from '../dist/unicodeText.js';
 
 test('parses remembered length and titles containing spaces', () => {
@@ -33,12 +33,19 @@ test('random characters can use an inclusive 1-based range while repeating chara
   assert.throws(() => randomCharacters([... 'abcd'], 3, () => 0, 0, 2), /不足/);
 });
 
-test('random lines selects distinct line indexes and truncates the final line', () => {
-  const result = randomLines(['甲乙', '丙丁戊', '己庚'], 4, () => 0);
-  assert.equal(result.text.length, 4);
+test('random lines selects the requested number of distinct complete lines', () => {
+  const result = randomLines(['甲乙', '丙丁戊', '己庚'], 2, () => 0);
+  assert.equal(result.text, '甲乙丙丁戊');
   assert.equal(new Set(result.indexes).size, result.indexes.length);
   assert.deepEqual(result.indexes, [0, 1]);
-  assert.equal(randomLines(['甲乙', '丙丁戊', '己庚'], 4, () => 0, 1, 3).text, '丙丁戊己');
-  assert.equal(randomLines(['甲😀', '乙𨇭丙'], 3, () => 0, 0, 2, [2, 3], [0, 2, 5]).text, '甲😀乙');
-  assert.throws(() => randomLines(['甲', '乙'], 3), /不足/);
+  assert.equal(randomLines(['甲乙', '丙丁戊', '己庚'], 2, () => 0, 1, 3).text, '丙丁戊己庚');
+  assert.equal(randomLines(['甲😀', '乙𨇭丙'], 2, () => 0).text, '甲😀乙𨇭丙');
+  assert.throws(() => randomLines(['甲', '乙'], 3), /不足 3 行/);
+});
+
+test('random line selection uses line count rather than character count', () => {
+  assert.deepEqual(randomLineSelection([2, 3, 2], 2, () => 0, 0, 3), {
+    type: 'lines', indexes: [0, 1], length: 2
+  });
+  assert.throws(() => randomLineSelection([2, 3], 3), /不足 3 行/);
 });

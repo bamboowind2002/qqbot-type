@@ -1,10 +1,10 @@
 import { countCodePoints, createCodePointIndex, sliceCodePoints } from './unicodeText.js';
 
-export function parseSegmentArguments(args, defaultLength = 100) {
+export function parseSegmentArguments(args, defaultLength = 100, unit = '字') {
   const values = [...(args || [])];
   let length = defaultLength;
   if (/^\d+$/.test(values[0] || '')) length = Number(values.shift());
-  if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error('每段字数必须是 10 至 2000 的整数。');
+  if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error(`每段${unit}数必须是 10 至 2000 的整数。`);
   return { length, title: values.join(' ').trim() };
 }
 
@@ -59,36 +59,28 @@ export function randomCharacters(chars, length, random = Math.random, rangeStart
 
 export function randomLines(lines, length, random = Math.random, rangeStart = 0, rangeEnd = lines.length, lineLengths = null, linePrefix = null) {
   if (!Number.isInteger(rangeStart) || !Number.isInteger(rangeEnd) || rangeStart < 0 || rangeEnd > lines.length || rangeEnd <= rangeStart) throw new Error('乱序下标范围超出文章行数。');
-  lineLengths ||= lines.map(countCodePoints);
-  const available = linePrefix ? linePrefix[rangeEnd] - linePrefix[rangeStart] : lineLengths.slice(rangeStart, rangeEnd).reduce((total, value) => total + value, 0);
-  if (available < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
+  if (!Number.isInteger(length) || length < 1) throw new Error('乱序行数必须是正整数。');
+  if (rangeEnd - rangeStart < length) throw new Error(`指定行范围只有 ${rangeEnd - rangeStart} 行，不足 ${length} 行。`);
   const indexes = Array.from({ length: rangeEnd - rangeStart }, (_, index) => index + rangeStart);
   const selected = [];
-  let total = 0;
-  while (total < length) {
-    const offset = selected.length + Math.floor(random() * (indexes.length - selected.length));
-    [indexes[selected.length], indexes[offset]] = [indexes[offset], indexes[selected.length]];
-    const index = indexes[selected.length];
-    selected.push(index);
-    total += lineLengths[index];
+  for (let i = 0; i < length; i++) {
+    const offset = i + Math.floor(random() * (indexes.length - i));
+    [indexes[i], indexes[offset]] = [indexes[offset], indexes[i]];
+    selected.push(indexes[i]);
   }
-  const text = selected.map(index => lines[index]).join('');
-  return { text: sliceCodePoints(text, 0, length), indexes: selected };
+  return { text: selected.map(index => lines[index]).join(''), indexes: selected };
 }
 
 export function randomLineSelection(lineLengths, length, random = Math.random, rangeStart = 0, rangeEnd = lineLengths.length) {
   if (!Number.isInteger(rangeStart) || !Number.isInteger(rangeEnd) || rangeStart < 0 || rangeEnd > lineLengths.length || rangeEnd <= rangeStart) throw new Error('乱序下标范围超出文章行数。');
-  const available = lineLengths.slice(rangeStart, rangeEnd).reduce((total, value) => total + value, 0);
-  if (available < length) throw new Error(`指定行范围内容不足 ${length} 字。`);
+  if (!Number.isInteger(length) || length < 1) throw new Error('乱序行数必须是正整数。');
+  if (rangeEnd - rangeStart < length) throw new Error(`指定行范围只有 ${rangeEnd - rangeStart} 行，不足 ${length} 行。`);
   const indexes = Array.from({ length: rangeEnd - rangeStart }, (_, index) => index + rangeStart);
   const selected = [];
-  let total = 0;
-  while (total < length) {
-    const offset = selected.length + Math.floor(random() * (indexes.length - selected.length));
-    [indexes[selected.length], indexes[offset]] = [indexes[offset], indexes[selected.length]];
-    const index = indexes[selected.length];
-    selected.push(index);
-    total += lineLengths[index];
+  for (let i = 0; i < length; i++) {
+    const offset = i + Math.floor(random() * (indexes.length - i));
+    [indexes[i], indexes[offset]] = [indexes[offset], indexes[i]];
+    selected.push(indexes[i]);
   }
   return { type: 'lines', indexes: selected, length };
 }

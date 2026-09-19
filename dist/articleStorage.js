@@ -321,8 +321,7 @@ export async function readArticleSelection(title, selection, metadata) {
   } finally { stream.destroy(); }
   if (selection.type === 'lines') {
     for (const part of lineParts) {
-      for (const char of part) { if (output.length >= selection.length) break; output.push(char); }
-      if (output.length >= selection.length) break;
+      output.push(...part);
     }
   }
   const after = await articleStat(title);
