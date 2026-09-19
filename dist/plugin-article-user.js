@@ -190,7 +190,7 @@ async function difficultyMode(e, difficulty, args, persistedCondition = '') {
   const recent = sameMode ? (previous.recentSegments || []) : [];
   let excluded = new Set(recent.map(item => `${item.title}:${item.start}`));
   const titles = listArticles({ sort: false });
-  const deadline = Date.now() + 5000;
+  const deadline = Infinity;
   const budget = { attempts: 0 };
   let result = await chooseDifficultySegmentStreaming(titles, parsed.length, normalized, null, readRandomArticleSelection, get_rank, Math.random, () => Date.now(), excluded, deadline, budget, consql);
   if (!result && excluded.size && Date.now() <= deadline) {

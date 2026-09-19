@@ -9,7 +9,7 @@ export const DIFFICULTY_RANGES = Object.freeze({
 
 const VALID_DIFFICULTY_RANKS = new Set(['淼', '水', '易', '普', '难', '虐', '爆表']);
 const MAX_ATTEMPTS = 1000;
-const MAX_DURATION_MS = 5000;
+const MAX_DURATION_MS = Number.POSITIVE_INFINITY;
 const difficultyIndexCache = new WeakMap();
 
 export function isValidDifficultyResult(score, rank, error = false) {
