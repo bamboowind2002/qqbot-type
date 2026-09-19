@@ -1,3 +1,5 @@
+import { removeArticleIndexFile } from './articleStorage.js';
+
 function query(connection, sql, values = []) {
   return new Promise((resolve, reject) => connection.query(sql, values, (error, rows) => error ? reject(error) : resolve(rows)));
 }
@@ -7,6 +9,7 @@ export function buildDifficultyIndex(rows) {
     title: String(row.title),
     length: Number(row.char_count),
     revision: row.content_sha256 || null,
+    indexKey: row.index_key || row.content_sha256 || null,
     updatedAt: row.updated_at || null
   })).filter(row => Number.isSafeInteger(row.length) && row.length >= 0)
     .sort((a, b) => b.length - a.length || a.title.localeCompare(b.title, 'zh-CN'));
@@ -58,6 +61,8 @@ export async function loadDifficultyIndex(connection) {
       join article_category_members m on m.title = a.title
       join article_categories c on c.category = m.category
      where c.difficulty_enabled = 1
+       and a.index_status = 'ready'
+       and a.index_key is not null
      order by a.char_count desc, a.title asc`);
   return buildDifficultyIndex(rows);
 }
@@ -69,11 +74,20 @@ export async function bumpCatalogRevision(connection) {
 }
 
 export async function upsertArticleCatalog(connection, article) {
+  const oldRows = await query(connection, 'select index_key from article_catalog where title = ? limit 1', [article.title]);
+  const oldIndexKey = oldRows[0]?.index_key || null;
+  const newIndexKey = article.indexKey || article.sha256;
   await query(connection, `insert into article_catalog
-    (title, char_count, byte_count, content_sha256)
-    values (?, ?, ?, ?)
-    on duplicate key update char_count = values(char_count), byte_count = values(byte_count), content_sha256 = values(content_sha256), updated_at = current_timestamp`,
-  [article.title, article.chars, article.bytes, article.sha256]);
+    (title, char_count, byte_count, content_sha256, index_status, index_key, index_byte_count, index_stride, index_updated_at, index_error)
+    values (?, ?, ?, ?, 'ready', ?, ?, ?, current_timestamp, null)
+    on duplicate key update char_count = values(char_count), byte_count = values(byte_count), content_sha256 = values(content_sha256),
+      index_status = values(index_status), index_key = values(index_key), index_byte_count = values(index_byte_count), index_stride = values(index_stride),
+      index_updated_at = values(index_updated_at), index_error = null, updated_at = current_timestamp`,
+  [article.title, article.chars, article.bytes, article.sha256, newIndexKey, article.indexByteCount || null, article.indexStride || null]);
+  if (oldIndexKey && oldIndexKey !== newIndexKey) {
+    const references = await query(connection, 'select count(*) as count from article_catalog where index_key = ?', [oldIndexKey]);
+    if (!Number(references[0]?.count || 0)) await removeArticleIndexFile(oldIndexKey).catch(() => {});
+  }
   await bumpCatalogRevision(connection);
 }
 
@@ -117,10 +131,10 @@ export async function syncArticleDifficultyCatalog(connection, titles, scanMetad
   for (const title of titles) {
     if (existing.has(title)) continue;
     const metadata = await scanMetadata(title);
-    await query(connection, `insert into article_catalog (title, char_count, byte_count, content_sha256)
-      values (?, ?, ?, ?)
-      on duplicate key update char_count = values(char_count), byte_count = values(byte_count), content_sha256 = values(content_sha256)`,
-    [title, metadata.compactLength, metadata.size, metadata.textRevision]);
+    await query(connection, `insert into article_catalog (title, char_count, byte_count, content_sha256, index_status, index_key)
+      values (?, ?, ?, ?, 'pending', ?)
+      on duplicate key update char_count = values(char_count), byte_count = values(byte_count), content_sha256 = values(content_sha256), index_status = 'pending', index_key = values(index_key)`,
+    [title, metadata.compactLength, metadata.size, metadata.textRevision, metadata.textRevision]);
   }
   await bumpCatalogRevision(connection);
 }

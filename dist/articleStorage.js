@@ -6,8 +6,10 @@ import { StringDecoder } from 'node:string_decoder';
 import { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 import { countCodePoints, createCodePointIndex } from './unicodeText.js';
 import { articleUserError } from './articleErrors.js';
+import { ARTICLE_INDEX_DIR, ARTICLE_INDEX_STRIDE, articleIndexPath, buildArticleOffsetIndex, writeArticleOffsetIndex, readRandomArticleSelection as readIndexedArticleSelection } from './articleOffsetIndex.js';
 
 export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
+export { ARTICLE_INDEX_DIR, ARTICLE_INDEX_STRIDE } from './articleOffsetIndex.js';
 
 export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
 
@@ -364,18 +366,33 @@ async function writeArticle(title, text, state = null) {
   if (total > ARTICLE_MAX_TOTAL_BYTES) throw new Error('文章总容量不能超过 10 GiB。');
   if ((!state || state.writes % 256 === 0) && diskFreeBytes(ARTICLE_TEXT_DIR) - output.length < 10 * 1024 ** 3) throw new Error('磁盘可用空间不足 10 GiB，未保存文章。');
   const temporary = path.join(ARTICLE_TEXT_DIR, `.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const outputHash = crypto.createHash('sha256').update(output).digest('hex');
+  const offsetIndex = buildArticleOffsetIndex(text, output.length, outputHash);
+  await fsp.mkdir(ARTICLE_INDEX_DIR, { recursive: true });
+  const temporaryIndex = path.join(ARTICLE_INDEX_DIR, `.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`);
   try {
     await fsp.writeFile(temporary, output, { flag: 'wx' });
+    await writeArticleOffsetIndex(outputHash, offsetIndex, temporaryIndex);
+    try { await fsp.rename(temporaryIndex, articleIndexPath(outputHash)); }
+    catch (error) {
+      if (error.code === 'EEXIST') await fsp.rm(temporaryIndex, { force: true });
+      else throw error;
+    }
     await fsp.rename(temporary, target);
-  } finally { await fsp.rm(temporary, { force: true }).catch(() => {}); }
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+    await fsp.rm(temporaryIndex, { force: true }).catch(() => {});
+  }
   if (state) {
     state.totalBytes = total;
     state.sizes.set(title, output.length);
     state.writes++;
   }
   invalidateArticleView(title);
-  return { title, chars: [...compactArticleText(text)].length, bytes: output.length, sha256: crypto.createHash('sha256').update(output).digest('hex') };
+  return { title, chars: [...compactArticleText(text)].length, bytes: output.length, sha256: outputHash, indexKey: outputHash, indexByteCount: HEADER_INDEX_BYTES(offsetIndex), indexStride: offsetIndex.stride };
 }
+
+function HEADER_INDEX_BYTES(index) { return 72 + index.checkpoints.length * 16; }
 
 export async function saveArticle(title, source, explicitEncoding) {
   const buffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
@@ -434,4 +451,28 @@ export async function deleteArticle(title) {
   const { removeArticleFromAllCategories } = await import('./articleCategories.js');
   await removeArticleFromAllCategories(title);
   return title;
+}
+
+export async function readRandomArticleSelection(title, { start, length, articleLength, indexKey }) {
+  return {
+    text: await readIndexedArticleSelection(articlePath(title), indexKey, start, length, articleLength),
+    textRevision: indexKey,
+    compactRevision: indexKey
+  };
+}
+
+export async function ensureArticleOffsetIndex(title) {
+  const file = articlePath(title);
+  const buffer = await fsp.readFile(file);
+  const text = normalizeArticleText(buffer, 'utf-8');
+  if (!Buffer.from(text).equals(buffer)) throw new Error('文章正文尚未规范化，无法生成随机索引。');
+  const contentSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+  const index = buildArticleOffsetIndex(text, buffer.length, contentSha256);
+  await writeArticleOffsetIndex(contentSha256, index);
+  return { title, chars: index.compactLength, bytes: buffer.length, sha256: contentSha256, indexKey: contentSha256, indexByteCount: HEADER_INDEX_BYTES(index), indexStride: index.stride };
+}
+
+export async function removeArticleIndexFile(indexKey) {
+  if (!indexKey) return;
+  await fsp.rm(articleIndexPath(indexKey), { force: true });
 }

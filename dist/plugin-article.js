@@ -1,4 +1,4 @@
-import { randomInt, createHash } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,12 +9,15 @@ import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata } from './articleStorage.js';
+import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata, removeArticleIndexFile } from './articleStorage.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName, listCategories, listCategoryArticles } from './articleCategories.js';
 import { addArticleCategoryRecord, listArticleCategoryDifficulty, removeArticleCategoryRecord, removeArticleCatalog, renameArticleCategoryRecord, setArticleCategoryDifficulty, syncArticleDifficultyCatalog, upsertArticleCatalog } from './articleDifficultyCatalog.js';
 import { articleBatchErrorMessage, toArticleUserMessage } from './articleErrors.js';
 
 const deleteTokens = new Map();
+function queryConnection(connection, sql, values = []) {
+  return new Promise((resolve, reject) => connection.query(sql, values, (error, rows) => error ? reject(error) : resolve(rows)));
+}
 syncArticleDifficultyCatalog(
   consql,
   new Set(listArticles({ sort: false })),
@@ -170,7 +173,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
       const entry = entries[index];
       try {
         const result = await saveBatchArticle(entry.title, entry.text);
-        await upsertArticleCatalog(consql, { title: entry.title, chars: [...entry.text.replace(/\n/gu, '')].length, bytes: Buffer.byteLength(entry.text), sha256: createHash('sha256').update(entry.text).digest('hex') });
+        await upsertArticleCatalog(consql, result);
         await addArticleCategory(category, entry.title);
         await addArticleCategoryRecord(consql, category, entry.title);
         results.push(result);
@@ -275,7 +278,16 @@ async function handleAdmin(e, command) {
   if (command.action === 'confirm-delete') {
     const key = `${e.sender.user_id}:${args[0]}`, pending = deleteTokens.get(key);
     if (!pending || pending.expires < Date.now()) { deleteTokens.delete(key); throw new Error('确认码不存在或已过期。'); }
-    deleteTokens.delete(key); await deleteArticle(pending.title); await removeArticleCatalog(consql, pending.title); return send(e, `文章“${pending.title}”已删除。`);
+    deleteTokens.delete(key);
+    const rows = await queryConnection(consql, 'select index_key from article_catalog where title = ? limit 1', [pending.title]);
+    const indexKey = rows[0]?.index_key || null;
+    await deleteArticle(pending.title);
+    await removeArticleCatalog(consql, pending.title);
+    if (indexKey) {
+      const references = await queryConnection(consql, 'select count(*) as count from article_catalog where index_key = ?', [indexKey]);
+      if (!Number(references[0]?.count || 0)) await removeArticleIndexFile(indexKey);
+    }
+    return send(e, `文章“${pending.title}”已删除。`);
   }
 }
 

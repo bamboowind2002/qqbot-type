@@ -1,6 +1,5 @@
 import { createCodePointIndex, sliceCodePoints } from './unicodeText.js';
-import { getCatalogRevision, loadDifficultyIndex, weightedDifficultySelection } from './articleDifficultyCatalog.js';
-import { readArticleSelectionMetadata } from './articleStorage.js';
+import { getCatalogRevision, loadDifficultyIndex, weightedDifficultySelection, mysqlQuery, bumpCatalogRevision } from './articleDifficultyCatalog.js';
 
 export const DIFFICULTY_RANGES = Object.freeze({
   '淼': [0, 0.1], '水': [0.1, 0.3], '易': [0.3, 0.8],
@@ -83,6 +82,7 @@ export async function chooseDifficultySegmentStreaming(
   if (!Number.isInteger(length) || length < 10 || length > 2000) throw new Error('每段字数必须是 10 至 2000 的整数。');
   let difficultyIndex = null;
   let catalogRevision = null;
+  const invalidArticles = new Set();
   if (catalogConnection) {
     catalogRevision = await getCatalogRevision(catalogConnection);
     const cached = difficultyIndexCache.get(catalogConnection);
@@ -100,18 +100,41 @@ export async function chooseDifficultySegmentStreaming(
       ? weightedDifficultySelection(difficultyIndex, length, random)
       : null;
     if (difficultyIndex && !sampled) throw new Error(`没有长度达到 ${length} 字的文章。`);
+    if (sampled && invalidArticles.has(sampled.title)) continue;
     const title = sampled?.title || titles[randomIndex(random, titles.length)];
-    let metadata;
-    try { metadata = sampled
-      ? await readArticleSelectionMetadata(title, sampled.articleLength, sampled.revision)
-      : await scan(title); }
-    catch (error) { if (error?.code === 'ENOENT') continue; if (error?.code === 'ARTICLE_CHANGED') continue; throw error; }
-    if (metadata.compactLength < length) { await new Promise(resolve => setImmediate(resolve)); continue; }
-    const start = sampled?.start ?? randomIndex(random, metadata.compactLength - length + 1);
+    if (!sampled) {
+      // The catalog-backed path is the production path. Keep the fallback
+      // injectable for callers that do not have a catalog (tests/tools).
+      let metadata;
+      try { metadata = await scan(title); }
+      catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ARTICLE_CHANGED') continue; throw error; }
+      if (metadata.compactLength < length) continue;
+      const start = randomIndex(random, metadata.compactLength - length + 1);
+      if (excluded.has(`${title}:${start}`)) continue;
+      let selected;
+      try { selected = await read(title, { type: 'compact', start, length }, metadata); }
+      catch (error) { if (error?.code === 'ARTICLE_CHANGED') continue; throw error; }
+      if ([...selected.text].length !== length) continue;
+      const [score, , rank, error] = getRank(selected.text);
+      if (isValidDifficultyResult(score, rank, error) && isDifficultyMatch(score, difficulty)) return { title, text: selected.text, start, score, rank, attempts, revision: selected.compactRevision };
+      await new Promise(resolve => setImmediate(resolve));
+      continue;
+    }
+    const start = sampled.start;
     if (excluded.has(`${title}:${start}`)) { await new Promise(resolve => setImmediate(resolve)); continue; }
     let selected;
-    try { selected = await read(title, { type: 'compact', start, length }, metadata); }
-    catch (error) { if (error?.code === 'ARTICLE_CHANGED') { await new Promise(resolve => setImmediate(resolve)); continue; } throw error; }
+    try { selected = await read(title, { start, length, articleLength: sampled.articleLength, indexKey: sampled.indexKey }); }
+    catch (error) {
+      if (error?.code === 'ARTICLE_INDEX_INVALID' || error?.code === 'ENOENT' || error?.code === 'ARTICLE_CHANGED') {
+        if (sampled && catalogConnection && (error?.code === 'ARTICLE_INDEX_INVALID' || error?.code === 'ENOENT')) {
+          invalidArticles.add(title);
+          await mysqlQuery(catalogConnection, `update article_catalog set index_status = 'pending', index_error = ? where title = ? and index_key = ?`, [error.message || error.code, title, sampled.indexKey]).catch(() => {});
+          await bumpCatalogRevision(catalogConnection).catch(() => {});
+        }
+        await new Promise(resolve => setImmediate(resolve)); continue;
+      }
+      throw error;
+    }
     if ([...selected.text].length !== length) { await new Promise(resolve => setImmediate(resolve)); continue; }
     const [score, , rank, error] = getRank(selected.text);
     if (isValidDifficultyResult(score, rank, error) && isDifficultyMatch(score, difficulty)) return { title, text: selected.text, start, score, rank, attempts, revision: selected.compactRevision };
