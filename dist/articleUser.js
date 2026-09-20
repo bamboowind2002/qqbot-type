@@ -1,4 +1,4 @@
-import { listArticles, validateArticleTitle, readArticleViews } from './articleStorage.js';
+import { listArticles, resolveArticleTitle, readArticleViews } from './articleStorage.js';
 
 function query(connection, sql, values = []) {
   return new Promise((resolve, reject) => connection.query(sql, values, (err, rows) => err ? reject(err) : resolve(rows)));
@@ -26,8 +26,7 @@ export async function saveLastArticleCondition(connection, qqid, condition) {
 }
 
 export async function selectArticle(connection, qqid, title) {
-  title = validateArticleTitle(title);
-  if (!listArticles().includes(title)) throw new Error(`未找到文章“${title}”。`);
+  title = resolveArticleTitle(title, listArticles());
   await query(connection, `insert into article_user_settings (qqid, current_title, segment_length)
     values (?, ?, 100) on duplicate key update current_title = values(current_title)`, [String(qqid), title]);
   return title;

@@ -9,7 +9,7 @@ import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
 import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
-import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata, removeArticleIndexFile } from './articleStorage.js';
+import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, resolveArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata, removeArticleIndexFile } from './articleStorage.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName, listCategories, listCategoryArticles } from './articleCategories.js';
 import { addArticleCategoryRecord, listArticleCategoryDifficulty, removeArticleCategoryRecord, removeArticleCatalog, renameArticleCategoryRecord, setArticleCategoryDifficulty, syncArticleDifficultyCatalog, upsertArticleCatalog } from './articleDifficultyCatalog.js';
 import { articleBatchErrorMessage, toArticleUserMessage } from './articleErrors.js';
@@ -218,7 +218,7 @@ async function handleAdmin(e, command) {
   }
   if (command.action === 'category-add' || command.action === 'category-remove') {
     if (args.length < 2) throw new Error(`格式：-管 分类 ${command.action === 'category-add' ? '添加' : '删除'} <分类名> <文章标题>`);
-    const category = validateCategoryName(args[0]), title = validateArticleTitle(args.slice(1).join(' '));
+    const category = validateCategoryName(args[0]), title = resolveArticleTitle(args.slice(1).join(' '));
     const result = command.action === 'category-add' ? await addArticleCategory(category, title) : await removeArticleCategory(category, title);
     if (command.action === 'category-add') await addArticleCategoryRecord(consql, category, title);
     else await removeArticleCategoryRecord(consql, category, title);
@@ -226,7 +226,7 @@ async function handleAdmin(e, command) {
   }
   if (command.action === 'article-rename') {
     if (args.length !== 2) throw new Error('格式：-管 重命名 <旧标题> <新标题>');
-    const oldTitle = validateArticleTitle(args[0]), newTitle = validateArticleTitle(args[1]);
+    const oldTitle = resolveArticleTitle(args[0]), newTitle = validateArticleTitle(args[1]);
     const filesystemRename = await renameArticle(oldTitle, newTitle);
     let databaseRenamed = false;
     try {
@@ -264,13 +264,13 @@ async function handleAdmin(e, command) {
     if (args.length < 3) throw new Error('格式：-管 改 <起点> <终点> <文章标题>，下一行填写正则表达式。');
     const lines = String(e.raw_message || '').split(/\r?\n/);
     if (lines.length < 2) throw new Error('请在第二行填写正则表达式。');
-    const result = await replaceArticleRange(args.slice(2).join(' '), Number(args[0]), Number(args[1]), lines[1], lines.slice(2).join('\n'));
+    const result = await replaceArticleRange(resolveArticleTitle(args.slice(2).join(' ')), Number(args[0]), Number(args[1]), lines[1], lines.slice(2).join('\n'));
     await upsertArticleCatalog(consql, result);
     return send(e, `文章“${result.title}”替换成功，共 ${result.chars} 字。`);
   }
   if (command.action === 'delete') {
     if (!args.length) throw new Error('格式：-管 删 <文章标题>');
-    const title = validateArticleTitle(args.join(' '));
+    const title = resolveArticleTitle(args.join(' '));
     const token = String(randomInt(100000, 1000000));
     deleteTokens.set(`${e.sender.user_id}:${token}`, { title, expires: Date.now() + 300000 });
     return send(e, `请在 5 分钟内发送“-管 确认 ${token}”删除文章“${title}”。`);

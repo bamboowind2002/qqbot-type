@@ -12,6 +12,7 @@ export { ARTICLE_DIR, ARTICLE_TEXT_DIR } from './articlePaths.js';
 export { ARTICLE_INDEX_DIR, ARTICLE_INDEX_STRIDE } from './articleOffsetIndex.js';
 
 export const ARTICLE_MAX_TOTAL_BYTES = 10 * 1024 ** 3;
+export const ARTICLE_TITLE_MATCH_LIMIT = 50;
 
 const articleViewCache = new Map();
 const ARTICLE_VIEW_CACHE_MAX_BYTES = 64 * 1024 ** 2;
@@ -32,6 +33,26 @@ export function validateArticleTitle(title) {
   if (/[\\/\u0000-\u001f\u007f]/u.test(title)) throw new Error('文章标题不能包含路径分隔符或控制字符。');
   if (/\p{White_Space}/u.test(title)) throw new Error('文章标题不能包含空格或其他空白字符。');
   return title;
+}
+
+export function findArticleTitleMatches(titles, query, limit = ARTICLE_TITLE_MATCH_LIMIT) {
+  const normalized = validateArticleTitle(query);
+  const all = [...titles].filter(title => String(title).includes(normalized));
+  return {
+    total: all.length,
+    titles: all.slice(0, Math.max(0, Number(limit) || 0))
+  };
+}
+
+export function resolveArticleTitle(title, titles = listArticles()) {
+  const normalized = validateArticleTitle(title);
+  if (titles.includes(normalized)) return normalized;
+  const matches = findArticleTitleMatches(titles, normalized);
+  if (matches.total === 1) return matches.titles[0];
+  if (matches.total > 1) {
+    throw new Error(`未找到完整文章标题“${normalized}”。模糊匹配到 ${matches.total} 项，请使用完整名称：\n${matches.titles.join('\n')}`);
+  }
+  throw new Error(`未找到文章“${normalized}”。`);
 }
 
 export function articlePath(title) {

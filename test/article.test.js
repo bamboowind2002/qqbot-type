@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeArticleText, compactArticleText, splitArticleLines, validateArticleTitle } from '../dist/articleStorage.js';
+import { normalizeArticleText, compactArticleText, splitArticleLines, validateArticleTitle, findArticleTitleMatches, resolveArticleTitle } from '../dist/articleStorage.js';
 import { parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from '../dist/articleCommands.js';
 import { formatArticleMessage, formatArticleTitle } from '../dist/articleMessage.js';
 
@@ -19,6 +19,20 @@ test('validates article titles as path-safe Unicode names', () => {
   assert.throws(() => validateArticleTitle(' \u3000\t'), /不能为空/);
   assert.throws(() => validateArticleTitle('../秘密'), /路径/);
   assert.throws(() => validateArticleTitle(''), /不能为空/);
+});
+
+test('resolves exact and unique fuzzy article titles', () => {
+  const titles = ['春风', '春风十里', '秋风'];
+  assert.equal(resolveArticleTitle('春风', titles), '春风');
+  assert.equal(resolveArticleTitle('秋', titles), '秋风');
+  assert.throws(() => resolveArticleTitle('春', titles), /模糊匹配到 2 项[\s\S]*春风十里/);
+  assert.throws(() => resolveArticleTitle('冬', titles), /未找到文章/);
+});
+
+test('limits fuzzy title display while retaining the total count', () => {
+  const result = findArticleTitleMatches(Array.from({ length: 55 }, (_, index) => `标题${index}`), '标题');
+  assert.equal(result.total, 55);
+  assert.equal(result.titles.length, 50);
 });
 
 test('parses short and long list commands and preserves direct text only', () => {

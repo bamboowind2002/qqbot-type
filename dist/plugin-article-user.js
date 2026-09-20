@@ -8,7 +8,7 @@ import { compileScoreCondition, getArticleSession, openArticleSession, closeArti
 import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { chooseDifficultySegmentStreaming, getArticleRank, normalizeDifficulty } from './articleDifficulty.js';
 import { mysqlQuery } from './articleDifficultyCatalog.js';
-import { listArticles, scanArticleMetadata, readArticleSelection, readRandomArticleSelection } from './articleStorage.js';
+import { listArticles, resolveArticleTitle, scanArticleMetadata, readArticleSelection, readRandomArticleSelection } from './articleStorage.js';
 import { listCategoryArticles } from './articleCategories.js';
 import { toArticleUserMessage } from './articleErrors.js';
 
@@ -143,6 +143,7 @@ async function search(e, args) {
   const raw = args.join(' '), split = raw.split(/\s+于\s+/), settings = await getArticleSettings(consql, userId(e));
   let keyword = split[0].trim(), title = split[1]?.trim() || settings.current_title;
   if (!title) return send(e, '尚未选择文章，请先选择文章或使用“于 <标题>”。');
+  if (split[1]?.trim()) title = resolveArticleTitle(title);
   let page = 1;
   const pageMatch = keyword.match(/\s+(\d+)$/);
   if (pageMatch) { page = Number(pageMatch[1]); keyword = keyword.slice(0, pageMatch.index).trim(); }
@@ -159,6 +160,7 @@ async function articleMode(e, mode, args) {
   const condition = split.length > 1 ? split.slice(1).join('|').trim() : '';
   let title = parsed.title || settings.current_title;
   if (!title) throw new Error('尚未选择文章，请先发送“-选 <标题>”或在命令后附文章标题。');
+  if (parsed.title && mode !== 'ordered') title = resolveArticleTitle(title);
   if (mode === 'ordered') {
     if (parsed.title) title = await selectArticle(consql, userId(e), title);
     return sendNextOrderedSegment(e, title, parsed.length, condition);
