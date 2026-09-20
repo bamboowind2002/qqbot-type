@@ -8,7 +8,7 @@ import { bot, consql } from './bot.js';
 import { databaseConfig } from './config.js';
 import { runMysqlTransaction } from './mysqlTransaction.js';
 import { Structs } from 'node-napcat-ts';
-import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, ARTICLE_HELP } from './articleCommands.js';
+import { isArticleAdmin, parseArticleCommand, extractDirectArticleText, getArticleHelp, ARTICLE_ADMIN_HELP } from './articleCommands.js';
 import { saveArticle, createArticleBatchWriter, replaceArticleRange, deleteArticle, renameArticle, validateArticleTitle, resolveArticleTitle, normalizeArticleText, listArticles, scanArticleMetadata, removeArticleIndexFile } from './articleStorage.js';
 import { addArticleCategory, removeArticleCategory, renameArticleCategory, categoryStatus, validateCategoryName, listCategories, listCategoryArticles } from './articleCategories.js';
 import { addArticleCategoryRecord, listArticleCategoryDifficulty, removeArticleCategoryRecord, removeArticleCatalog, renameArticleCategoryRecord, setArticleCategoryDifficulty, syncArticleDifficultyCatalog, upsertArticleCatalog } from './articleDifficultyCatalog.js';
@@ -187,7 +187,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
 async function handleAdmin(e, command) {
   if (!isArticleAdmin(e.sender?.user_id ?? e.user_id)) return;
   const args = command.args;
-  if (command.action === 'admin-help') return send(e, ARTICLE_HELP);
+  if (command.action === 'admin-help') return send(e, ARTICLE_ADMIN_HELP);
   if (command.action === 'category-help') return send(e, '分类管理：-管 分类 添加/删除 <分类名> <文章标题>；-管 分类 重命名 <旧分类名> <新分类名>；-管 分类 列表');
   if (command.action === 'category-list') {
     if (args.length) throw new Error('格式：-管 分类 列表');
@@ -298,7 +298,7 @@ bot.on('message', async e => {
     console.log('[plugin-article] message received', { ...articleEventContext(e), text: directText.slice(0, 200), command });
     if (!command) return;
     if (command.action === 'category-list') return await sendCategoryList(e);
-    if (command.action === 'help') return await send(e, ARTICLE_HELP);
+    if (command.action === 'help') return await send(e, getArticleHelp(command.args));
     const isAdmin = isArticleAdmin(e.sender?.user_id ?? e.user_id);
     console.log('[plugin-article] command parsed', { ...articleEventContext(e), action: command.action, args: command.args, isAdmin });
     if (['upload', 'batch-upload', 'replace', 'article-rename', 'delete', 'confirm-delete', 'admin-help', 'category-help', 'category-list', 'category-add', 'category-remove', 'category-rename', 'category-difficulty-list', 'category-difficulty-view', 'category-difficulty-enable', 'category-difficulty-disable'].includes(command.action)) return await handleAdmin(e, command);
