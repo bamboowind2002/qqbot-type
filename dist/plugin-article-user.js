@@ -369,7 +369,7 @@ bot.on('message', async e => {
       }
       return await send(e, `已设置每段数量为 ${length}；-乱 按行数，其余发文模式按字数。`);
     }
-    if (command.action === '发') return await repeatLast(e);
+    if (command.action === '发') return await resumeLastConfig(e);
     if (command.action === '条件') return await conditionStatus(e);
     if (command.action === '模式') return await modeStatus(e);
     if (command.action === 'list') return await list(e, command);
