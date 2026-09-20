@@ -356,9 +356,9 @@ bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
-    if (command.action === '设置字数') {
+    if (command.action === '字数' || command.action === '设置字数') {
       if (command.args?.length !== 1 || !/^\d+$/u.test(command.args[0])) {
-        throw new Error('格式：-设置字数 <10至2000的整数>');
+        throw new Error('格式：-字数 <10至2000的整数>');
       }
       const length = Number(command.args[0]);
       await setSegmentLength(consql, userId(e), length);
