@@ -356,6 +356,19 @@ bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
+    if (command.action === '设置字数') {
+      if (command.args?.length !== 1 || !/^\d+$/u.test(command.args[0])) {
+        throw new Error('格式：-设置字数 <10至2000的整数>');
+      }
+      const length = Number(command.args[0]);
+      await setSegmentLength(consql, userId(e), length);
+      const session = getArticleSession(sessionKey(e));
+      if (session) {
+        session.length = length;
+        touchArticleSession(session);
+      }
+      return await send(e, `已设置每段数量为 ${length}；-乱 按行数，其余发文模式按字数。`);
+    }
     if (command.action === '发') return await repeatLast(e);
     if (command.action === '条件') return await conditionStatus(e);
     if (command.action === '模式') return await modeStatus(e);
