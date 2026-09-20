@@ -427,10 +427,21 @@ const ARTICLE_HELP_TOPICS = {
 ~~~`
 };
 
+function plainHelpText(value) {
+  return String(value)
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^~~~(?:text)?\s*$/gm, '')
+    .replace(/^>\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/^\s*(?:[-*]|\d+[.)])\s+/gm, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
 export function getArticleHelp(args = []) {
   const key = args.map(value => String(value)).join(' ').trim();
-  if (!key) return ARTICLE_HELP;
-  return ARTICLE_HELP_TOPICS[key] || '未找到这个帮助主题。\n请发送“-帮助”查看帮助目录。';
+  if (!key) return plainHelpText(ARTICLE_HELP);
+  return plainHelpText(ARTICLE_HELP_TOPICS[key] || '未找到这个帮助主题。\n请发送“-帮助”查看帮助目录。');
 }
 
 export const ARTICLE_ADMIN_HELP = `发文帮助
