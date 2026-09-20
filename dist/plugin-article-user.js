@@ -160,9 +160,10 @@ async function articleMode(e, mode, args) {
   const condition = split.length > 1 ? split.slice(1).join('|').trim() : '';
   let title = parsed.title || settings.current_title;
   if (!title) throw new Error('尚未选择文章，请先发送“-选 <标题>”或在命令后附文章标题。');
-  if (parsed.title && mode !== 'ordered') title = resolveArticleTitle(title);
+  if (parsed.title) {
+    title = await selectArticle(consql, userId(e), title);
+  }
   if (mode === 'ordered') {
-    if (parsed.title) title = await selectArticle(consql, userId(e), title);
     return sendNextOrderedSegment(e, title, parsed.length, condition);
   }
   await setSegmentLength(consql, userId(e), parsed.length);
