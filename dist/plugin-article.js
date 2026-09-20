@@ -140,6 +140,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
     await onProgress({ phase: '解压', total: files.length, force: true });
     const entries = [], skipped = [];
     const titles = new Set();
+    const existingTitles = new Set(listArticles({ sort: false }));
     let totalBytes = 0;
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
@@ -153,6 +154,7 @@ async function batchUpload(category, archive, onProgress = async () => {}) {
       try {
         title = validateArticleTitle(path.basename(file, path.extname(file)));
         if (titles.has(title)) throw new Error(`清理标题后与其他文件重复：“${title}”`);
+        if (existingTitles.has(title)) throw new Error(`文章已存在，自动跳过：“${title}”`);
         const stat = await fsp.stat(file);
         totalBytes += stat.size;
         if (totalBytes > MAX_ARCHIVE_TEXT_BYTES) throw new Error('解压后的正文总大小超过 2 GiB');
