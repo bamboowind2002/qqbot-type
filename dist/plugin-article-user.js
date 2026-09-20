@@ -1,6 +1,7 @@
 import { bot, consql } from './bot.js';
 import { Structs } from 'node-napcat-ts';
 import { ARTICLE_PREFIX, parseArticleCommand, extractDirectArticleText } from './articleCommands.js';
+import { get_reply, has_reply, get_text_content_from_msg } from './util.js';
 import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, getProgressState, setProgress, saveOrderedProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, parseRandomRange, randomParagraphSelection, randomLineSelection } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
@@ -15,6 +16,17 @@ import { toArticleUserMessage } from './articleErrors.js';
 const send = (e, value) => e.quick_action([Structs.text(String(value))]);
 const userId = e => String(e.sender?.user_id ?? e.user_id);
 const triggerName = e => String(e.sender?.card || e.sender?.nickname || e.sender?.user_id || '未知用户');
+const quotedSenderName = message => String(message?.sender?.card || message?.sender?.nickname || message?.sender?.user_id || '未知用户');
+
+async function quoteArticle(e, command) {
+  if (command.args?.length) throw new Error('格式：引用一条消息后发送“-引”。');
+  if (!has_reply(e.message)) throw new Error('请引用一条消息后再发送“-引”。');
+  const messageId = get_reply(e.message);
+  if (typeof messageId === 'undefined') throw new Error('未找到被引用的消息。');
+  const quoted = await bot.get_msg({ message_id: messageId });
+  const text = (await get_text_content_from_msg(quoted.message, true, quoted.message_type, quoted.group_id)).join('');
+  return send(e, formatArticleMessage(text, { title: quotedSenderName(quoted), trigger: triggerName(e) }));
+}
 
 async function readCatalogArticleMetadata(title) {
   const rows = await mysqlQuery(consql, 'select char_count, index_status, index_key from article_catalog where title = ? limit 1', [title]);
@@ -356,6 +368,7 @@ bot.on('message', async e => {
   try {
     const command = parseArticleCommand(extractDirectArticleText(e.message));
     if (!command) return;
+    if (command.action === '引') return await quoteArticle(e, command);
     if (command.action === '字数' || command.action === '设置字数') {
       if (command.args?.length !== 1 || !/^\d+$/u.test(command.args[0])) {
         throw new Error('格式：-字数 <10至2000的整数>');

@@ -67,5 +67,9 @@ test('replaces the special article title prefix only in the output title', () =>
 });
 
 test('includes the main user-facing article commands in built-in help', () => {
-  for (const command of ['-文', '-选', '-模式', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-上', '-下', '-发', '-自', '-停']) assert.match(ARTICLE_HELP, new RegExp(command));
+  for (const command of ['-文', '-选', '-模式', '-进', '-顺', '-随', '-乱', '-难度发文', '-搜', '-上', '-下', '-发', '-自', '-停', '-引']) assert.match(ARTICLE_HELP, new RegExp(command));
+});
+
+test('parses the quoted-message article command', () => {
+  assert.deepEqual(parseArticleCommand('-引'), { action: '引', args: [], difficulty: false });
 });
