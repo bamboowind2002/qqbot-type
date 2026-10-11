@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 const sessions = new Map();
+const advanceLocks = new Map();
 const TTL = 60 * 60 * 1000;
 
 export function sessionKey(e) {
@@ -15,6 +16,24 @@ function cleanup(key) {
 
 export function getArticleSession(key) { return cleanup(key); }
 export function closeArticleSession(key) { sessions.delete(key); }
+
+// Requests received for the same session may advance it only once.
+export async function withArticleAdvance(key, task) {
+  const expected = getArticleSession(key);
+  const previous = advanceLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  advanceLocks.set(key, current);
+  await previous;
+  try {
+    const session = getArticleSession(key);
+    if (session !== expected) return;
+    return await task(session);
+  } finally {
+    release();
+    if (advanceLocks.get(key) === current) advanceLocks.delete(key);
+  }
+}
 
 export function openArticleSession(key, value) {
   const session = { ...value, key, expires: Date.now() + TTL };

@@ -5,7 +5,7 @@ import { get_reply, has_reply, get_text_content_from_msg } from './util.js';
 import { getArticleSettings, saveLastArticleConfig, saveLastArticleCondition, selectArticle, setSegmentLength, getProgress, getProgressState, setProgress, saveOrderedProgress, readArticle, clampProgress, searchArticle } from './articleUser.js';
 import { parseSegmentArguments, parseRandomRange, randomParagraphSelection, randomLineSelection } from './articleModes.js';
 import { formatArticleMessage } from './articleMessage.js';
-import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession } from './articleSession.js';
+import { compileScoreCondition, getArticleSession, openArticleSession, closeArticleSession, sessionKey, parseScore, touchArticleSession, withArticleAdvance } from './articleSession.js';
 import { isOrderedSessionCurrent, nextOrderedRange, orderedLockKey, previousOrderedRange, resolveOrderedRepeat, withOrderedLock } from './articleOrdered.js';
 import { chooseDifficultySegmentStreaming, getArticleRank, normalizeDifficulty } from './articleDifficulty.js';
 import { mysqlQuery } from './articleDifficultyCatalog.js';
@@ -337,8 +337,10 @@ async function handleSessionCommand(e, command) {
     return send(e, conditionText ? `自动续段条件已设置：${conditionText}` : '已恢复无条件自动续段。');
   }
   if (command.action === '下' || command.action === '下一段') {
-    if (!session) return resumeLastConfig(e, false, true);
-    return continueSession(e, session);
+    return withArticleAdvance(key, current => {
+      if (!current) return resumeLastConfig(e, false, true);
+      return continueSession(e, current);
+    });
   }
   if (command.action === '上' || command.action === '上一段') {
     return sendPreviousOrderedSegment(e, session);
@@ -348,20 +350,21 @@ async function handleSessionCommand(e, command) {
 async function handleScore(e) {
   const score = parseScore(e.raw_message);
   if (!score) return;
-  const session = getArticleSession(sessionKey(e));
-  if (!session || score.segment !== session.segment || !session.condition(score.metrics)) return;
-  if (session.mode === 'ordered') {
-    const metadata = await readCatalogArticleMetadata(session.title), articleLength = metadata.compactLength;
-    const state = await getProgressState(consql, userId(e), session.title);
-    if (state.position >= articleLength) {
-      return reportOrderedExhausted(e, session.title);
+  return withArticleAdvance(sessionKey(e), async session => {
+    if (!session || score.segment !== session.segment || !session.condition(score.metrics)) return;
+    if (session.mode === 'ordered') {
+      const metadata = await readCatalogArticleMetadata(session.title), articleLength = metadata.compactLength;
+      const state = await getProgressState(consql, userId(e), session.title);
+      if (state.position >= articleLength) {
+        return reportOrderedExhausted(e, session.title);
+      }
+      if (!isOrderedSessionCurrent(session, state, articleLength)) {
+        closeArticleSession(sessionKey(e));
+        return;
+      }
     }
-    if (!isOrderedSessionCurrent(session, state, articleLength)) {
-      closeArticleSession(sessionKey(e));
-      return;
-    }
-  }
-  await continueSession(e, session);
+    await continueSession(e, session);
+  });
 }
 
 bot.on('message', async e => {
